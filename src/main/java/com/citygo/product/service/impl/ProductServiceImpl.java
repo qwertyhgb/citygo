@@ -189,6 +189,77 @@ public class ProductServiceImpl implements ProductService {
         return pageVO;
     }
 
+    @Override
+    public PageVO<ProductVO> pagePublic(Long shopId, Long categoryId, String keyword,
+                                        java.math.BigDecimal minPrice, java.math.BigDecimal maxPrice,
+                                        String sort, long pageNum, long pageSize) {
+        // 指定店铺时校验店铺存在且正常营业
+        if (shopId != null) {
+            Shop shop = shopMapper.selectById(shopId);
+            if (shop == null || shop.getStatus() == 0) {
+                throw new BizException(ErrorCode.SHOP_NOT_FOUND);
+            }
+        }
+
+        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Product> qw =
+                Wrappers.lambdaQuery();
+        // 只查上架商品
+        qw.eq(Product::getStatus, 1);
+        if (shopId != null) {
+            qw.eq(Product::getShopId, shopId);
+        }
+        if (categoryId != null) {
+            qw.eq(Product::getCategoryId, categoryId);
+        }
+        if (StringUtils.hasText(keyword)) {
+            qw.like(Product::getProductName, keyword);
+        }
+        if (minPrice != null) {
+            qw.ge(Product::getPrice, minPrice);
+        }
+        if (maxPrice != null) {
+            qw.le(Product::getPrice, maxPrice);
+        }
+        // 排序白名单映射：排序字段必须白名单映射，防止 SQL 注入
+        String sortKey = sort == null ? "default" : sort;
+        switch (sortKey) {
+            case "sales" -> qw.orderByDesc(Product::getSales).orderByDesc(Product::getId);
+            case "price_asc" -> qw.orderByAsc(Product::getPrice).orderByDesc(Product::getId);
+            case "price_desc" -> qw.orderByDesc(Product::getPrice).orderByDesc(Product::getId);
+            default -> qw.orderByDesc(Product::getId);
+        }
+
+        Page<Product> page = productMapper.selectPage(
+                new Page<>(pageNum, Math.min(Math.max(pageSize, 1), 50)), qw);
+        PageVO<ProductVO> pageVO = new PageVO<>();
+        pageVO.setTotal(page.getTotal());
+        pageVO.setPageNum(page.getCurrent());
+        pageVO.setPageSize(page.getSize());
+        Map<Long, String> categoryIdNameMap = loadCategoryNames(page.getRecords());
+        // 公开接口脱敏：库存属商家内部经营数据，不向用户端暴露
+        pageVO.setRecords(page.getRecords().stream()
+                .map(p -> {
+                    ProductVO vo = toVO(p, categoryIdNameMap);
+                    vo.setStock(null);
+                    return vo;
+                })
+                .toList());
+        return pageVO;
+    }
+
+    @Override
+    public ProductVO getPublicDetail(Long id) {
+        Product product = productMapper.selectById(id);
+        // 不存在或已下架都视为不存在
+        if (product == null || product.getStatus() == 0) {
+            throw new BizException(ErrorCode.PRODUCT_NOT_FOUND);
+        }
+        // 公开接口脱敏：不返回库存
+        ProductVO vo = toVO(product, loadCategoryNames(List.of(product)));
+        vo.setStock(null);
+        return vo;
+    }
+
     /**
      * 查询商品所属分类的名称映射，避免逐条查库（N+1）。
      */

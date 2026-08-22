@@ -44,12 +44,21 @@ public class SecurityConfig {
                 // 无状态会话：不创建/使用 HttpSession
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // ==================== 精确规则必须放在通配规则之前 ====================
+                        // Spring Security 的 authorizeHttpRequests 按声明顺序匹配，第一条命中即生效。
+                        // /api/shops/my 与 /api/products/my 本身是 GET 请求，若不提前声明，
+                        // 会被下方的 GET /api/shops/**、GET /api/products/** 通配放行误伤（绕过登录）。
+                        // 因此先声明这两个"我的"接口需要认证，再放行公开浏览的 GET 通配。
+                        .requestMatchers(HttpMethod.GET, "/api/shops/my", "/api/products/my").authenticated()
                         // 注册/登录无需认证
                         .requestMatchers("/api/auth/register", "/api/auth/login").permitAll()
                         // 商家注册无需认证（与 /api/auth/register 均是公开注册入口）
                         .requestMatchers("/api/merchants/register").permitAll()
                         // 分类列表公开查询
                         .requestMatchers("/api/categories").permitAll()
+                        // 用户端浏览：店铺/商品的公开读接口（仅 GET 放行，写接口不受影响）
+                        .requestMatchers(HttpMethod.GET, "/api/shops/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/products/**").permitAll()
                         // 连通性探测无需认证
                         .requestMatchers("/api/ping").permitAll()
                         // Swagger / OpenAPI：未登录也可查看接口文档
@@ -58,7 +67,7 @@ public class SecurityConfig {
                         .requestMatchers("/actuator/**").permitAll()
                         // 预检请求
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-                        // 其余一律要求认证（含 /api/auth/logout、/api/users/me）
+                        // 其余一律要求认证（含 /api/auth/logout、/api/users/me 及店铺/商品的写操作）
                         .anyRequest().authenticated())
                 .exceptionHandling(eh -> eh
                         .authenticationEntryPoint((request, response, authException) -> {

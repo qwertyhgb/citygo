@@ -37,4 +37,17 @@ public interface ProductService {
      */
     PageVO<ProductVO> pageMy(Long shopId, String keyword, long pageNum, long pageSize, Long currentUserId);
 
+    /**
+     * 公开商品分页查询（仅上架商品，支持店铺/分类/关键词/价格区间过滤与白名单排序；
+     * 返回结果 stock 置 null 脱敏）。shopId 非空时校验店铺 status=1，否则抛 SHOP_NOT_FOUND。
+     */
+    PageVO<ProductVO> pagePublic(Long shopId, Long categoryId, String keyword,
+                                 java.math.BigDecimal minPrice, java.math.BigDecimal maxPrice,
+                                 String sort, long pageNum, long pageSize);
+
+    /**
+     * 公开商品详情（仅上架商品；不存在或下架抛 PRODUCT_NOT_FOUND；stock 置 null 脱敏）。
+     */
+    ProductVO getPublicDetail(Long id);
+
 }
