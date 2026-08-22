@@ -77,6 +77,15 @@
             <version>3.5.17</version>
         </dependency>
 
+        <!-- MyBatis-Plus 分页等 SQL 解析（jsqlparser）支持模块。
+             MP 3.5.9+ 已将 PaginationInnerInterceptor 从 extension 拆到此模块，
+             使用分页插件必须引入，版本与 MP 主版本保持一致。 -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-jsqlparser</artifactId>
+            <version>3.5.17</version>
+        </dependency>
+
         <!-- springdoc：基于 OpenAPI 3 规范生成接口文档，内置 Swagger UI。
              官方基于 Spring Boot 4.1 构建，与当前工程版本匹配。 -->
         <dependency>

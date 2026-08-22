@@ -5,6 +5,7 @@ import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -28,6 +29,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
  */
 @Configuration
 @EnableWebSecurity
+@EnableMethodSecurity
 public class SecurityConfig {
 
     /**
@@ -44,6 +46,10 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // 注册/登录无需认证
                         .requestMatchers("/api/auth/register", "/api/auth/login").permitAll()
+                        // 商家注册无需认证（与 /api/auth/register 均是公开注册入口）
+                        .requestMatchers("/api/merchants/register").permitAll()
+                        // 分类列表公开查询
+                        .requestMatchers("/api/categories").permitAll()
                         // 连通性探测无需认证
                         .requestMatchers("/api/ping").permitAll()
                         // Swagger / OpenAPI：未登录也可查看接口文档

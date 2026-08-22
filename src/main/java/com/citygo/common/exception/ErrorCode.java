@@ -47,7 +47,24 @@ public enum ErrorCode {
     USER_DISABLED(403, "账号已被禁用"),
 
     /** JWT 非法、过期或服务端登录态（Redis）已失效 */
-    TOKEN_INVALID(401, "登录状态无效或已过期");
+    TOKEN_INVALID(401, "登录状态无效或已过期"),
+
+    // ---------------- Phase 4 商家/店铺/商品/分类域错误码 ----------------
+
+    /** 按用户ID未查到商家资料（当前用户不是商家） */
+    MERCHANT_NOT_FOUND(404, "商家信息不存在"),
+
+    /** 按店铺ID未查到店铺 */
+    SHOP_NOT_FOUND(404, "店铺不存在"),
+
+    /** 按商品ID未查到商品 */
+    PRODUCT_NOT_FOUND(404, "商品不存在"),
+
+    /** 按分类ID未查到分类 */
+    CATEGORY_NOT_FOUND(404, "分类不存在"),
+
+    /** 尝试操作不属于当前商家的资源（越权） */
+    UNAUTHORIZED_OPERATION(403, "无权操作该资源");
 
     /** 业务错误码 */
     private final int code;

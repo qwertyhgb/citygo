@@ -5,6 +5,7 @@ import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.authorization.AuthorizationDeniedException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -37,6 +38,16 @@ public class GlobalExceptionHandler {
     public Result<Void> handleBizException(BizException e) {
         log.warn("业务异常: code={}, message={}", e.getErrorCode().getCode(), e.getMessage());
         return Result.error(e.getErrorCode());
+    }
+
+    /**
+     * 处理方法级鉴权失败 {@link AuthorizationDeniedException}（如 @PreAuthorize 拒绝）。
+     * 已登录但无对应角色权限时触发，统一返回 403；日志记 WARN。
+     */
+    @ExceptionHandler(AuthorizationDeniedException.class)
+    public Result<Void> handleAuthorizationDenied(AuthorizationDeniedException e) {
+        log.warn("鉴权失败: {}", e.getMessage());
+        return Result.error(ErrorCode.FORBIDDEN);
     }
 
     /**
