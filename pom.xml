@@ -84,6 +84,21 @@
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
             <version>3.1.0</version>
         </dependency>
+
+        <!-- Flyway：数据库迁移版本管理工具，按版本号顺序执行 db/migration 下的迁移脚本，
+             并把执行记录写入 flyway_schema_history，保证各环境数据库结构一致。
+             版本号由 Spring Boot BOM 统一管理，此处不写 version。
+             注：Spring Boot 4 已将 Flyway 自动配置拆为独立模块，需使用该 starter 引入自动装配。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-flyway</artifactId>
+        </dependency>
+        <!-- Flyway 10+ 将数据库支持拆分为独立模块，MySQL 需额外引入该支持包，
+             否则迁移时会报 Unsupported Database: MySQL。 -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-mysql</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

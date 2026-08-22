@@ -13,6 +13,16 @@ spring:
   profiles:
     # 默认激活的环境；可通过启动参数 --spring.profiles.active=xxx 覆盖
     active: dev
+  # Flyway 数据库迁移管理：按版本号顺序执行固定目录下的迁移脚本，
+  # 并把每条已执行的迁移记录到 flyway_schema_history 表。数据库结构变更全部走迁移脚本，
+  # 以保证各环境（dev/test/prod）的库结构一致且可追溯。
+  flyway:
+    # 启动时自动执行尚未执行的迁移脚本
+    enabled: true
+    # 迁移脚本所在目录（classpath 下）
+    locations: classpath:db/migration
+    # 迁移脚本编码
+    encoding: UTF-8
 
 # springdoc：OpenAPI 规范与 Swagger UI 的路径配置
 springdoc:
