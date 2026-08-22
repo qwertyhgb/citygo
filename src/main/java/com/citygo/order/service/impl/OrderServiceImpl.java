@@ -434,6 +434,17 @@ public class OrderServiceImpl implements OrderService {
         //    先按 order_id 查出已核销（status=2）的券，再条件更新 status=2→1 并清空 order_id/used_time；
         //    条件更新 0 行说明已退过/并发已处理，忽略即可（幂等，与回补库存在同一事务保证一致性）。
         returnCoupons(order.getId());
+
+        // 缓存失效与 ES 同步（与下单路径 create 的 k/m 步骤对称）：
+        //    取消会回补库存并回减月销，商品详情缓存（productDetail）与热门商品缓存（hotProducts）都会变旧。
+        //    顺序：先主动失效缓存，再在事务提交后（afterCommit）同步 ES 商品文档（销量/库存近实时）。
+        List<Long> productIds = items.stream().map(OrderItem::getProductId).distinct().toList();
+        for (Long productId : productIds) {
+            productService.evictProductDetail(productId);
+        }
+        productService.evictHotProducts();
+        searchSync.afterCommit(() -> productSearchService.syncProducts(
+                productMapper.selectByIds(productIds)));
     }
 
     /**
