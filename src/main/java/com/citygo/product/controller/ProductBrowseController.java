@@ -1,5 +1,6 @@
 package com.citygo.product.controller;
 
+import com.citygo.common.annotation.RateLimit;
 import com.citygo.common.page.PageVO;
 import com.citygo.common.result.Result;
 import com.citygo.product.dto.ProductBrowseQuery;
@@ -12,7 +13,10 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 /**
  * 用户端商品浏览接口（公开，无需登录）。
@@ -38,6 +42,17 @@ public class ProductBrowseController {
                 query.getShopId(), query.getCategoryId(), query.getKeyword(),
                 query.getMinPrice(), query.getMaxPrice(),
                 query.getSort(), query.getPageNum(), query.getPageSize()));
+    }
+
+    /**
+     * 热门商品（销量 top N，手写缓存三防；库存脱敏）。
+     * 加 @RateLimit 作为限流示例：固定窗口 1 秒内最多 5 次，超限返回 429，便于测试触发。
+     */
+    @Operation(summary = "热门商品")
+    @GetMapping("/hot")
+    @RateLimit(limit = 5, windowSeconds = 1)
+    public Result<List<ProductVO>> hot(@RequestParam(defaultValue = "10") int limit) {
+        return Result.success(productService.getHotProducts(limit));
     }
 
     /**

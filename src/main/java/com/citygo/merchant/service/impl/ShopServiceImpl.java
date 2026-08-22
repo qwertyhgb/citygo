@@ -12,6 +12,7 @@ import com.citygo.merchant.mapper.ShopMapper;
 import com.citygo.merchant.service.MerchantService;
 import com.citygo.merchant.service.ShopService;
 import com.citygo.merchant.vo.ShopVO;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -86,6 +87,9 @@ public class ShopServiceImpl implements ShopService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    // 店铺信息被修改后，立即失效对应店铺详情缓存（与 ShopBrowseServiceImpl.getDetail 的 @Cacheable 联动），
+    // 下次访问用户端详情会重新查库回填，避免读到旧数据。
+    @CacheEvict(cacheNames = "shopDetail", key = "#id")
     public ShopVO update(Long id, ShopUpdateRequest request, Long currentUserId) {
         Merchant merchant = requireMerchant(currentUserId);
         Shop shop = requireOwnedShop(id, merchant.getId());

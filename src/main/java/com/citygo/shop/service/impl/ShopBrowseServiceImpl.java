@@ -10,6 +10,7 @@ import com.citygo.merchant.mapper.ShopMapper;
 import com.citygo.shop.dto.ShopBrowseQuery;
 import com.citygo.shop.service.ShopBrowseService;
 import com.citygo.shop.vo.ShopBrowseVO;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -59,7 +60,15 @@ public class ShopBrowseServiceImpl implements ShopBrowseService {
         return pageVO;
     }
 
+    /**
+     * 店铺详情缓存：key = shopDetail::{id}。
+     *
+     * <p>详情属"读多写少"场景，命中后不再查库。缓存与修改的联动见商家侧
+     * {@link com.citygo.merchant.service.impl.ShopServiceImpl#update} 上的 {@code @CacheEvict}：
+     * 一旦店铺被修改，对应 {@code shopDetail::{id}} 立即失效，下次访问重新查库回填，保证一致性。</p>
+     */
     @Override
+    @Cacheable(cacheNames = "shopDetail", key = "#id")
     public ShopBrowseVO getDetail(Long id) {
         Shop shop = shopMapper.selectById(id);
         // 不存在或已禁用都视为不存在

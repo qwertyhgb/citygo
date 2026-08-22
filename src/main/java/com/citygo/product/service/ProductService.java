@@ -7,6 +7,8 @@ import com.citygo.product.dto.ProductStockRequest;
 import com.citygo.product.dto.ProductUpdateRequest;
 import com.citygo.product.vo.ProductVO;
 
+import java.util.List;
+
 /**
  * 商品域服务接口。
  */
@@ -49,5 +51,20 @@ public interface ProductService {
      * 公开商品详情（仅上架商品；不存在或下架抛 PRODUCT_NOT_FOUND；stock 置 null 脱敏）。
      */
     ProductVO getPublicDetail(Long id);
+
+    /**
+     * 热门商品（销量 top N 的上架商品，手写缓存三防；stock 置 null 脱敏）。
+     */
+    List<ProductVO> getHotProducts(int limit);
+
+    /**
+     * 失效指定商品的详情缓存（下单扣库存等旁路写操作后触发，保证缓存一致性）。
+     */
+    void evictProductDetail(Long productId);
+
+    /**
+     * 失效热门商品缓存（上架/下架/改库存/下单后触发）。
+     */
+    void evictHotProducts();
 
 }
