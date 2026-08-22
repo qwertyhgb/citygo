@@ -94,7 +94,33 @@ public enum ErrorCode {
     REPEAT_SUBMIT(409, "请勿重复提交"),
 
     /** 单位时间窗口内请求次数超过限流阈值 */
-    TOO_MANY_REQUESTS(429, "请求过于频繁，请稍后再试");
+    TOO_MANY_REQUESTS(429, "请求过于频繁，请稍后再试"),
+
+    // ---------------- Phase 9 优惠券域错误码 ----------------
+
+    /** 按券ID未查到大券模板 */
+    COUPON_NOT_FOUND(404, "优惠券不存在"),
+
+    /** 券已领完（received_count >= total_count） */
+    COUPON_EXHAUSTED(409, "优惠券已被领完"),
+
+    /** 该用户已领取过该券（业务查重或唯一索引兜底触发） */
+    COUPON_ALREADY_CLAIMED(409, "您已领取过该优惠券"),
+
+    /** 券已过期（当前时间超出 valid_end / 用户券 expire_time） */
+    COUPON_EXPIRED(409, "优惠券已过期"),
+
+    /** 券活动未开始（当前时间早于 valid_start） */
+    COUPON_NOT_STARTED(409, "优惠券活动未开始"),
+
+    /** 券不可用（非本人/已使用/状态异常等通用无效场景） */
+    COUPON_INVALID(409, "优惠券不可用"),
+
+    /** 不满足使用门槛（订单金额 < 门槛金额） */
+    COUPON_THRESHOLD_NOT_MET(409, "未满足优惠券使用门槛"),
+
+    /** 商家券不适用于当前店铺 */
+    COUPON_SCOPE_MISMATCH(409, "优惠券不适用于该店铺");
 
     /** 业务错误码 */
     private final int code;

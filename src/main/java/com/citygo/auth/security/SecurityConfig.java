@@ -56,6 +56,8 @@ public class SecurityConfig {
                         .requestMatchers("/api/merchants/register").permitAll()
                         // 分类列表公开查询
                         .requestMatchers("/api/categories").permitAll()
+                        // 可领券列表公开查询（GET /api/coupons/my 因不在该精确路径内，仍要求登录）
+                        .requestMatchers(HttpMethod.GET, "/api/coupons").permitAll()
                         // 用户端浏览：店铺/商品的公开读接口（仅 GET 放行，写接口不受影响）
                         .requestMatchers(HttpMethod.GET, "/api/shops/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/products/**").permitAll()
