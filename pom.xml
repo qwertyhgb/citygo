@@ -115,11 +115,19 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
-        <!-- Spring Data Redis：本阶段用于存储登录态（token -> userId），
+        <!-- Spring Data Redis：本阶段用于存储登录态（token -> userId）以及缓存/锁/限流等，
              版本由 Spring Boot BOM 统一管理，不写 version。 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <!-- AOP 切面支持（@Aspect/@Around 等，用于分布式锁切面、防重复提交切面、限流切面）。
+             注意：Spring Boot 4 起，原 spring-boot-starter-aop 已改名为 spring-boot-starter-aspectj，
+             且 spring-boot-starter-webmvc 不再传递包含 AOP，使用 @Aspect 必须显式引入本依赖。
+             版本由 Spring Boot BOM 统一管理，不写 version。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aspectj</artifactId>
         </dependency>
         <!-- jjwt：JWT 生成/解析。按官方推荐拆为三部分：
              jjwt-api 编译期使用（Jwts/JwtParserBuilder 等）；

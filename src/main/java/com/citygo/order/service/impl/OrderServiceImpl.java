@@ -28,6 +28,7 @@ import com.citygo.order.vo.OrderItemVO;
 import com.citygo.order.vo.OrderVO;
 import com.citygo.product.entity.Product;
 import com.citygo.product.mapper.ProductMapper;
+import com.citygo.product.service.ProductService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -55,6 +56,7 @@ public class OrderServiceImpl implements OrderService {
     private final AddressService addressService;
     private final CartService cartService;
     private final MerchantService merchantService;
+    private final ProductService productService;
 
     public OrderServiceImpl(OrdersMapper ordersMapper,
                             OrderItemMapper orderItemMapper,
@@ -63,7 +65,8 @@ public class OrderServiceImpl implements OrderService {
                             ShopMapper shopMapper,
                             AddressService addressService,
                             CartService cartService,
-                            MerchantService merchantService) {
+                            MerchantService merchantService,
+                            ProductService productService) {
         this.ordersMapper = ordersMapper;
         this.orderItemMapper = orderItemMapper;
         this.paymentMapper = paymentMapper;
@@ -72,6 +75,7 @@ public class OrderServiceImpl implements OrderService {
         this.addressService = addressService;
         this.cartService = cartService;
         this.merchantService = merchantService;
+        this.productService = productService;
     }
 
     // ---------------- 下单 ----------------
@@ -165,6 +169,17 @@ public class OrderServiceImpl implements OrderService {
 
         // i. 清掉购物车中已下单的商品
         cartService.removeItems(currentUserId, productIds);
+
+        // k. 下单成功后失效商品相关缓存（写操作与缓存一致性取舍说明）：
+        //    下单会改库存与销量，商品详情缓存（productDetail）与热门商品缓存（hotProducts）都会变旧。
+        //    这里采用"下单成功即主动失效"的简化方案——扣库存走 ProductMapper.deductStock 绕过了
+        //    ProductService，故注入 ProductService 调用其 evict 方法触发 @CacheEvict / 手动删 key。
+        //    简化取舍：失效发生在事务提交前，极端并发下可能存在"缓存被旧数据回填"的短暂窗口，
+        //    学习项目可接受；生产更严谨做法是事务提交后再失效（如 TransactionSynchronization）。
+        for (Long productId : productIds) {
+            productService.evictProductDetail(productId);
+        }
+        productService.evictHotProducts();
 
         // j. 返回订单视图
         return toVO(order, true);

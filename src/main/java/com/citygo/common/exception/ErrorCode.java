@@ -86,7 +86,15 @@ public enum ErrorCode {
     ORDER_STATUS_INVALID(409, "当前订单状态不允许该操作"),
 
     /** 一次下单的商品不属于同一店铺 */
-    ORDER_CROSS_SHOP(400, "订单不能跨店铺下单");
+    ORDER_CROSS_SHOP(400, "订单不能跨店铺下单"),
+
+    // ---------------- Phase 7 Redis 专题（缓存/锁/幂等/限流）错误码 ----------------
+
+    /** 同一业务请求在幂等窗口内被重复提交（配合 X-Request-Id 防重复下单） */
+    REPEAT_SUBMIT(409, "请勿重复提交"),
+
+    /** 单位时间窗口内请求次数超过限流阈值 */
+    TOO_MANY_REQUESTS(429, "请求过于频繁，请稍后再试");
 
     /** 业务错误码 */
     private final int code;

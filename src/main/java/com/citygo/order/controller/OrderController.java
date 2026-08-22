@@ -1,5 +1,6 @@
 package com.citygo.order.controller;
 
+import com.citygo.common.annotation.IdempotentSubmit;
 import com.citygo.common.page.PageVO;
 import com.citygo.common.result.Result;
 import com.citygo.order.dto.OrderCreateRequest;
@@ -34,9 +35,12 @@ public class OrderController {
 
     /**
      * 下单。
+     * 加 @IdempotentSubmit：同一用户带相同 X-Request-Id 的连点只会成功一次，
+     * 与 Phase 6 的状态机/库存条件扣减形成双保险。
      */
     @Operation(summary = "下单")
     @PostMapping
+    @IdempotentSubmit
     public Result<OrderVO> create(@Valid @RequestBody OrderCreateRequest request) {
         return Result.success(orderService.create(request, currentUserId()));
     }
