@@ -30,6 +30,11 @@ public interface OrderService {
     void cancel(Long id, String cancelReason, Long currentUserId);
 
     /**
+     * 系统取消订单（超时自动关闭，无用户上下文；失败抛 BizException）。
+     */
+    void cancelBySystem(Long orderId);
+
+    /**
      * 模拟支付（幂等：已支付重复支付仍成功，不重复插入 payment）。
      */
     void pay(Long id, Long currentUserId);

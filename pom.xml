@@ -129,6 +129,13 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-aspectj</artifactId>
         </dependency>
+        <!-- RabbitMQ 消息队列：本阶段用于订单异步消息、支付通知广播、订单超时（TTL+死信队列）。
+             提供 RabbitTemplate 发布消息与 @RabbitListener 消费能力。
+             版本由 Spring Boot BOM 统一管理，不写 version。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
         <!-- jjwt：JWT 生成/解析。按官方推荐拆为三部分：
              jjwt-api 编译期使用（Jwts/JwtParserBuilder 等）；
              jjwt-impl 与 jjwt-jackson 仅在运行期加载（实现与 JSON 序列化）。 -->

@@ -14,6 +14,8 @@ import com.citygo.merchant.entity.Merchant;
 import com.citygo.merchant.entity.Shop;
 import com.citygo.merchant.mapper.ShopMapper;
 import com.citygo.merchant.service.MerchantService;
+import com.citygo.mq.message.OrderMessage;
+import com.citygo.mq.message.PaymentMessage;
 import com.citygo.order.dto.OrderCreateRequest;
 import com.citygo.order.dto.OrderItemRequest;
 import com.citygo.order.entity.OrderItem;
@@ -29,8 +31,12 @@ import com.citygo.order.vo.OrderVO;
 import com.citygo.product.entity.Product;
 import com.citygo.product.mapper.ProductMapper;
 import com.citygo.product.service.ProductService;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -57,6 +63,10 @@ public class OrderServiceImpl implements OrderService {
     private final CartService cartService;
     private final MerchantService merchantService;
     private final ProductService productService;
+    private final RabbitTemplate rabbitTemplate;
+
+    /** 订单超时分钟数：下单后发送 TTL 延迟消息的时长 */
+    private final long timeoutMinutes;
 
     public OrderServiceImpl(OrdersMapper ordersMapper,
                             OrderItemMapper orderItemMapper,
@@ -66,7 +76,9 @@ public class OrderServiceImpl implements OrderService {
                             AddressService addressService,
                             CartService cartService,
                             MerchantService merchantService,
-                            ProductService productService) {
+                            ProductService productService,
+                            RabbitTemplate rabbitTemplate,
+                            @Value("${citygo.order.timeout-minutes:30}") long timeoutMinutes) {
         this.ordersMapper = ordersMapper;
         this.orderItemMapper = orderItemMapper;
         this.paymentMapper = paymentMapper;
@@ -76,6 +88,8 @@ public class OrderServiceImpl implements OrderService {
         this.cartService = cartService;
         this.merchantService = merchantService;
         this.productService = productService;
+        this.rabbitTemplate = rabbitTemplate;
+        this.timeoutMinutes = timeoutMinutes;
     }
 
     // ---------------- 下单 ----------------
@@ -181,8 +195,48 @@ public class OrderServiceImpl implements OrderService {
         }
         productService.evictHotProducts();
 
+        // l. 事务提交后发布下单异步消息（order.created）与超时延迟消息（TTL）。
+        //    为什么 afterCommit 才发：若事务回滚，订单实际未落库，此时发消息会让消费者处理
+        //    不存在的订单（脏数据）。用 afterCommit 保证"订单确实提交成功才通知下游"；
+        //    生产可升级为"本地消息表 + 定时补偿"的最终一致方案，学习项目用 afterCommit 足够。
+        //    顺序：先发 order.created，再发超时延迟消息。
+        publishOrderCreatedAfterCommit(order);
+
         // j. 返回订单视图
         return toVO(order, true);
+    }
+
+    /**
+     * 事务提交后发送下单消息（order.created + 超时 TTL 延迟消息）。
+     */
+    private void publishOrderCreatedAfterCommit(Orders order) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            // 非事务/无同步回调环境（理论上不会走到，防御性兜底）
+            sendOrderMessages(order);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                sendOrderMessages(order);
+            }
+        });
+    }
+
+    /**
+     * 实际发送两条下单消息：异步通知（order.created）与延迟超时消息（超时毫秒 TTL）。
+     */
+    private void sendOrderMessages(Orders order) {
+        OrderMessage msg = new OrderMessage(order.getId(), order.getOrderNo());
+        // 一、async 通知：库存预警消费者
+        rabbitTemplate.convertAndSend("citygo.order.created.exchange", "order.created", msg);
+        // 二、超时延迟消息：消息级 TTL（毫秒），到期无人支付 → 死信 → 超时消费者自动取消
+        long ttlMillis = timeoutMinutes * 60 * 1000;
+        rabbitTemplate.convertAndSend("citygo.order.delay.exchange", "order.delay", msg,
+                m -> {
+                    m.getMessageProperties().setExpiration(String.valueOf(ttlMillis));
+                    return m;
+                });
     }
 
     // ---------------- 详情 ----------------
@@ -235,9 +289,33 @@ public class OrderServiceImpl implements OrderService {
             throw new BizException(ErrorCode.ORDER_STATUS_INVALID);
         }
         String reason = cancelReason == null || cancelReason.isBlank() ? "用户取消" : cancelReason;
+        cancelInternal(order, reason);
+    }
+
+    /**
+     * 系统取消订单（订单超时自动关闭，无用户上下文）。
+     *
+     * <p>与用户取消共用 {@link #cancelInternal}：状态机校验（仅 10 可取消）+ 条件更新 +
+     * 回补库存 + 月销回减的逻辑完全一致，只是入口不同（无归属校验、原因由系统指定）。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void cancelBySystem(Long orderId) {
+        Orders order = ordersMapper.selectById(orderId);
+        if (order == null || order.getStatus() != OrderStatus.PENDING_PAYMENT.getCode()) {
+            throw new BizException(ErrorCode.ORDER_STATUS_INVALID);
+        }
+        cancelInternal(order, "超时未支付，系统自动取消");
+    }
+
+    /**
+     * 取消的核心逻辑（用户取消与系统取消复用）：
+     * 状态条件更新（WHERE status=10，0 行即状态已变化）→ 回补库存 → 月销回减。
+     */
+    private void cancelInternal(Orders order, String reason) {
         // 状态条件更新（乐观锁思想）：WHERE status=10，0 行说明并发下状态已变化
         int rows = ordersMapper.update(null, Wrappers.<Orders>lambdaUpdate()
-                .eq(Orders::getId, id)
+                .eq(Orders::getId, order.getId())
                 .eq(Orders::getStatus, OrderStatus.PENDING_PAYMENT.getCode())
                 .set(Orders::getStatus, OrderStatus.CANCELLED.getCode())
                 .set(Orders::getCancelTime, LocalDateTime.now())
@@ -247,7 +325,7 @@ public class OrderServiceImpl implements OrderService {
         }
         // 回补库存：取消回补是"只增不减"方向，直接加回不会超卖
         List<OrderItem> items = orderItemMapper.selectList(
-                Wrappers.<OrderItem>lambdaQuery().eq(OrderItem::getOrderId, id));
+                Wrappers.<OrderItem>lambdaQuery().eq(OrderItem::getOrderId, order.getId()));
         for (OrderItem item : items) {
             productMapper.restoreStock(item.getProductId(), item.getQuantity());
         }
@@ -287,6 +365,18 @@ public class OrderServiceImpl implements OrderService {
         payment.setStatus(2);    // 2 支付成功
         payment.setPaidTime(LocalDateTime.now());
         paymentMapper.insert(payment);
+
+        // 事务提交后广播支付成功消息（fanout：通知用户 + 通知商家）。
+        // afterCommit 原因同下单：事务回滚则支付记录未落库，不应通知下游。
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    rabbitTemplate.convertAndSend("citygo.payment.success.exchange", "",
+                            new PaymentMessage(order.getId(), payment.getPaymentNo(), payment.getAmount()));
+                }
+            });
+        }
     }
 
     // ---------------- 商家订单列表 ----------------

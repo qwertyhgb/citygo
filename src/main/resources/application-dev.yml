@@ -15,6 +15,20 @@ spring:
     redis:
       host: localhost
       port: 6379
+  # RabbitMQ：连接本机 knowflow-rabbitmq 容器（官方镜像，无延迟队列插件 → 超时用 TTL+死信队列）
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    listener:
+      simple:
+        # 消费者重试：SB4 已将 3.x 的 max-attempts（总次数）改为 max-retries（仅重试次数）。
+        # 这里配 2 表示"重试 2 次，共 3 次尝试"。
+        retry:
+          max-retries: 2
+        # 重试耗尽后：false = 拒绝消息并不回队（进入 DLX/死信队列），而非无限重新入队。
+        default-requeue-rejected: false
 
 # MyBatis-Plus 配置
 mybatis-plus:
@@ -51,3 +65,7 @@ citygo:
     secret: citygo-dev-secret-key-please-change-in-prod-0123456789
     # token 有效期（秒），默认 86400 = 24 小时
     expire-seconds: 86400
+  order:
+    # 订单超时分钟数：下单后经过该时长未支付，由死信消费者自动关闭。
+    # 测试用消息级 TTL 覆盖此值，因此这里保持 30 分钟不改。
+    timeout-minutes: 30
