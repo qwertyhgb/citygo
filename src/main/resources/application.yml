@@ -1,0 +1,35 @@
+# =============================================================================
+# CityGo 通用配置
+# 所有环境共享的基础配置；环境相关的差异配置放在 application-{profile}.yml 中
+# =============================================================================
+server:
+  # 服务端口
+  port: 8080
+
+spring:
+  application:
+    # 应用名称，会作为服务注册/日志/Trace 标识的一部分
+    name: citygo-server
+  profiles:
+    # 默认激活的环境；可通过启动参数 --spring.profiles.active=xxx 覆盖
+    active: dev
+
+# springdoc：OpenAPI 规范与 Swagger UI 的路径配置
+springdoc:
+  api-docs:
+    # OpenAPI JSON 规范地址
+    path: /v3/api-docs
+  swagger-ui:
+    # Swagger UI 页面地址
+    path: /swagger-ui.html
+
+# Actuator：仅暴露健康检查与基础信息端点，减少不必要的信息泄露
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      # 始终展示健康检查的子组件详情（含 db 数据源状态），便于确认基础设施连通性
+      show-components: always

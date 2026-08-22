@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CityGo 日志配置 (logback-spring.xml)
+
+  日志分级意义：不同级别的日志承载不同类型的信息
+  - TRACE/DEBUG：细粒度调试信息，仅在开发期按需开启，生产阶段关闭避免刷屏
+  - INFO：关键运行事件（启动、请求完成、任务执行等），作为常规运行记录
+  - WARN：业务预期内异常或潜在风险，需要关注但不必告警
+  - ERROR：系统级故障（异常兜底），必须打印完整堆栈便于排查
+
+  值班/排查时优先看 ERROR，次看 WARN，INFO 用于业务流转追踪。
+-->
+<configuration>
+    <!-- ==================== 控制台输出 ==================== -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <charset>UTF-8</charset>
+            <!-- 时间 | 级别 | 线程名 | 日志器名 | 消息 -->
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{40} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- ==================== 文件输出（按天滚动） ==================== -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <!-- 当前日志文件名 -->
+        <file>logs/citygo-server.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <!-- 历史日志按天归档：# 按天数滚动形成独立文件 -->
+            <fileNamePattern>logs/citygo-server.%d{yyyy-MM-dd}.log</fileNamePattern>
+            <!-- 最多保留 30 天的历史日志 -->
+            <maxHistory>30</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <charset>UTF-8</charset>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{40} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- ==================== 根日志级别 ==================== -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+
+    <!-- ==================== 分环境差异化配置 ====================
+         dev 环境对业务包输出 DEBUG，便于本地开发；
+         其余环境（test/prod）业务包保持 INFO，减少日志量。
+         注意 logback 需要 springProfile 标签，文件名必须是 logback-spring.xml 才能识别。 -->
+    <springProfile name="dev">
+        <logger name="com.citygo" level="DEBUG"/>
+    </springProfile>
+
+    <springProfile name="!dev">
+        <logger name="com.citygo" level="INFO"/>
+    </springProfile>
+</configuration>
