@@ -24,4 +24,10 @@ public interface ShopBrowseService {
      */
     void requireEnabledShop(Long shopId);
 
+    /**
+     * 失效指定店铺的详情缓存（shopDetail::{shopId}）。
+     * 供评价等会导致店铺数据（如评分 score）变化的写操作调用，保证缓存与库一致。
+     */
+    void evictDetailCache(Long shopId);
+
 }

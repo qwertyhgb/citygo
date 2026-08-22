@@ -120,7 +120,15 @@ public enum ErrorCode {
     COUPON_THRESHOLD_NOT_MET(409, "未满足优惠券使用门槛"),
 
     /** 商家券不适用于当前店铺 */
-    COUPON_SCOPE_MISMATCH(409, "优惠券不适用于该店铺");
+    COUPON_SCOPE_MISMATCH(409, "优惠券不适用于该店铺"),
+
+    // ---------------- Phase 10 评价域错误码 ----------------
+
+    /** 该订单已评价（业务查重或唯一索引 uk_order_id 兜底触发） */
+    REVIEW_ALREADY_EXISTS(409, "该订单已评价"),
+
+    /** 按评价ID未查到大评价 */
+    REVIEW_NOT_FOUND(404, "评价不存在");
 
     /** 业务错误码 */
     private final int code;

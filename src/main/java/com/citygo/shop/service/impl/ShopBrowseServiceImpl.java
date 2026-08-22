@@ -10,6 +10,7 @@ import com.citygo.merchant.mapper.ShopMapper;
 import com.citygo.shop.dto.ShopBrowseQuery;
 import com.citygo.shop.service.ShopBrowseService;
 import com.citygo.shop.vo.ShopBrowseVO;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -87,6 +88,15 @@ public class ShopBrowseServiceImpl implements ShopBrowseService {
         if (shop == null || shop.getStatus() == 0) {
             throw new BizException(ErrorCode.SHOP_NOT_FOUND);
         }
+    }
+
+    /**
+     * 失效店铺详情缓存（评价改分后主动同步失效，见 ReviewServiceImpl 评分联动）。
+     */
+    @Override
+    @CacheEvict(cacheNames = "shopDetail", key = "#shopId")
+    public void evictDetailCache(Long shopId) {
+        // 方法体为空：仅靠 @CacheEvict 失效 shopDetail::{shopId}
     }
 
     /**
