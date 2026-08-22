@@ -72,7 +72,21 @@ public enum ErrorCode {
     ADDRESS_NOT_FOUND(404, "地址不存在"),
 
     /** 对已下架商品操作（加购/下单） */
-    PRODUCT_OFF_SHELF(409, "商品已下架");
+    PRODUCT_OFF_SHELF(409, "商品已下架"),
+
+    // ---------------- Phase 6 订单域错误码 ----------------
+
+    /** 库存不足导致扣减失败（CAS 扣减 0 行） */
+    INSUFFICIENT_STOCK(409, "商品库存不足"),
+
+    /** 按订单ID未查到订单（或无权查看，用 404 防探测） */
+    ORDER_NOT_FOUND(404, "订单不存在"),
+
+    /** 订单当前状态不允许该操作（状态条件更新失败） */
+    ORDER_STATUS_INVALID(409, "当前订单状态不允许该操作"),
+
+    /** 一次下单的商品不属于同一店铺 */
+    ORDER_CROSS_SHOP(400, "订单不能跨店铺下单");
 
     /** 业务错误码 */
     private final int code;
