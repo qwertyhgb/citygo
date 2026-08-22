@@ -180,8 +180,6 @@ public class ProductSearchServiceImpl implements ProductSearchService {
         doc.setSales(p.getSales());
         doc.setStock(p.getStock());
         doc.setStatus(p.getStatus());
-        doc.setCreateTime(p.getCreateTime() == null ? null
-                : p.getCreateTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
         return doc;
     }
 

@@ -154,8 +154,6 @@ public class ShopSearchServiceImpl implements ShopSearchService {
             // GeoPoint(lat, lon)：索引里 geo_point 以 [经度, 纬度] 存储
             doc.setLocation(new GeoPoint(shop.getLatitude().doubleValue(), shop.getLongitude().doubleValue()));
         }
-        doc.setCreateTime(shop.getCreateTime() == null ? null
-                : shop.getCreateTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
         return doc;
     }
 

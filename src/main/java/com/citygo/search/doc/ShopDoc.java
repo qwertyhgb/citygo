@@ -6,7 +6,6 @@ import org.springframework.data.elasticsearch.annotations.Document;
 import org.springframework.data.elasticsearch.annotations.Field;
 import org.springframework.data.elasticsearch.annotations.FieldType;
 import org.springframework.data.elasticsearch.annotations.GeoPointField;
-import org.springframework.data.elasticsearch.annotations.DateFormat;
 import org.springframework.data.elasticsearch.core.geo.GeoPoint;
 
 /**
@@ -60,9 +59,5 @@ public class ShopDoc {
     /** 经纬度（geo_point，[经度,纬度] 由 GeoPoint(lat,lon) 映射，用于附近店铺距离查询/排序） */
     @GeoPointField
     private GeoPoint location;
-
-    /** 创建时间（epoch 毫秒，直接用 Long 存，规避 LocalDateTime/Instant 的时区转换兼容问题） */
-    @Field(type = FieldType.Date, format = DateFormat.epoch_millis)
-    private Long createTime;
 
 }

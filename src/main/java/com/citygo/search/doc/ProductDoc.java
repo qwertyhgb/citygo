@@ -5,7 +5,6 @@ import org.springframework.data.annotation.Id;
 import org.springframework.data.elasticsearch.annotations.Document;
 import org.springframework.data.elasticsearch.annotations.Field;
 import org.springframework.data.elasticsearch.annotations.FieldType;
-import org.springframework.data.elasticsearch.annotations.DateFormat;
 
 /**
  * 商品搜索文档（索引 {@code citygo_product}）。
@@ -60,9 +59,5 @@ public class ProductDoc {
     /** 状态：1 上架 0 下架 */
     @Field(type = FieldType.Integer)
     private Integer status;
-
-    /** 创建时间（epoch 毫秒 Long 存，规避时区转换兼容问题） */
-    @Field(type = FieldType.Date, format = DateFormat.epoch_millis)
-    private Long createTime;
 
 }
