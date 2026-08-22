@@ -22,6 +22,9 @@ public class OrderCreateRequest {
     @Size(max = 255, message = "备注长度不能超过 255")
     private String remark;
 
+    /** 用户已领取的优惠券ID（用户券 id，可空：不使用优惠券） */
+    private Long couponId;
+
     /** 下单商品明细（至少一项） */
     @NotEmpty(message = "订单至少包含一个商品")
     @Valid

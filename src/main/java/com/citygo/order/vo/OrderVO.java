@@ -38,6 +38,9 @@ public class OrderVO {
     /** 优惠金额 */
     private BigDecimal discountAmount;
 
+    /** 使用的优惠券名称（未用券时为空） */
+    private String couponName;
+
     /** 实付金额 */
     private BigDecimal payAmount;
 

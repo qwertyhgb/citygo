@@ -10,6 +10,10 @@ import com.citygo.cart.service.CartService;
 import com.citygo.common.exception.BizException;
 import com.citygo.common.exception.ErrorCode;
 import com.citygo.common.page.PageVO;
+import com.citygo.coupon.entity.Coupon;
+import com.citygo.coupon.entity.UserCoupon;
+import com.citygo.coupon.mapper.CouponMapper;
+import com.citygo.coupon.mapper.UserCouponMapper;
 import com.citygo.merchant.entity.Merchant;
 import com.citygo.merchant.entity.Shop;
 import com.citygo.merchant.mapper.ShopMapper;
@@ -39,6 +43,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -64,6 +69,8 @@ public class OrderServiceImpl implements OrderService {
     private final MerchantService merchantService;
     private final ProductService productService;
     private final RabbitTemplate rabbitTemplate;
+    private final CouponMapper couponMapper;
+    private final UserCouponMapper userCouponMapper;
 
     /** 订单超时分钟数：下单后发送 TTL 延迟消息的时长 */
     private final long timeoutMinutes;
@@ -78,6 +85,8 @@ public class OrderServiceImpl implements OrderService {
                             MerchantService merchantService,
                             ProductService productService,
                             RabbitTemplate rabbitTemplate,
+                            CouponMapper couponMapper,
+                            UserCouponMapper userCouponMapper,
                             @Value("${citygo.order.timeout-minutes:30}") long timeoutMinutes) {
         this.ordersMapper = ordersMapper;
         this.orderItemMapper = orderItemMapper;
@@ -89,6 +98,8 @@ public class OrderServiceImpl implements OrderService {
         this.merchantService = merchantService;
         this.productService = productService;
         this.rabbitTemplate = rabbitTemplate;
+        this.couponMapper = couponMapper;
+        this.userCouponMapper = userCouponMapper;
         this.timeoutMinutes = timeoutMinutes;
     }
 
@@ -135,17 +146,20 @@ public class OrderServiceImpl implements OrderService {
             totalAmount = totalAmount.add(product.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
         }
 
+        // c1. 用券：券为空 → 无优惠；非空 → 校验 + 计算优惠金额
+        BigDecimal discount = computeCouponDiscount(request.getCouponId(), currentUserId, shopId, totalAmount);
+
         // d. 生成全局唯一订单号（雪花号，对外展示）
         String orderNo = IdWorker.getIdStr();
 
-        // e. 插入订单主表：待支付、无优惠、实付=总额，收货信息从 address 快照拷贝
+        // e. 插入订单主表：待支付、优惠=discount、实付=总额-优惠，收货信息从 address 快照拷贝
         Orders order = new Orders();
         order.setOrderNo(orderNo);
         order.setUserId(currentUserId);
         order.setShopId(shopId);
         order.setTotalAmount(totalAmount);
-        order.setDiscountAmount(BigDecimal.ZERO);
-        order.setPayAmount(totalAmount);
+        order.setDiscountAmount(discount);
+        order.setPayAmount(totalAmount.subtract(discount));
         order.setStatus(OrderStatus.PENDING_PAYMENT.getCode());
         // 快照意义：收货地址后续被用户修改，本订单仍展示下单时的地址
         order.setReceiverName(address.getReceiverName());
@@ -153,6 +167,9 @@ public class OrderServiceImpl implements OrderService {
         order.setReceiverAddress(address.getProvince() + address.getCity() + address.getDistrict() + address.getDetailAddress());
         order.setRemark(request.getRemark());
         ordersMapper.insert(order);
+
+        // e1. 订单已插入（拿到 orderId），核销用户券（幂等条件更新）
+        useCoupon(request.getCouponId(), currentUserId, order.getId());
 
         // f. 批量插入订单明细（商品名/图/单价均为快照）
         for (OrderItemRequest item : itemRequests) {
@@ -237,6 +254,76 @@ public class OrderServiceImpl implements OrderService {
                     m.getMessageProperties().setExpiration(String.valueOf(ttlMillis));
                     return m;
                 });
+    }
+
+    /**
+     * 用券前置校验与优惠计算：券为空返回 0；非空则校验归属/状态/有效期/适用范围/门槛，
+     * 并计算优惠金额。<b>不在此处写库</b>——核销（含 order_id）在订单插入后由 {@link #useCoupon} 完成。
+     */
+    private BigDecimal computeCouponDiscount(Long userCouponId, Long userId, Long orderShopId, BigDecimal totalAmount) {
+        if (userCouponId == null) {
+            return BigDecimal.ZERO;
+        }
+        UserCoupon userCoupon = userCouponMapper.selectById(userCouponId);
+        // 防用他人券：不存在或归属不符
+        if (userCoupon == null || !userCoupon.getUserId().equals(userId)) {
+            throw new BizException(ErrorCode.COUPON_INVALID);
+        }
+        // 已使用/已过期等状态异常
+        if (userCoupon.getStatus() != 1) {
+            throw new BizException(ErrorCode.COUPON_INVALID);
+        }
+        if (userCoupon.getExpireTime() != null
+                && userCoupon.getExpireTime().isBefore(LocalDateTime.now())) {
+            throw new BizException(ErrorCode.COUPON_EXPIRED);
+        }
+        Coupon coupon = couponMapper.selectById(userCoupon.getCouponId());
+        if (coupon == null) {
+            throw new BizException(ErrorCode.COUPON_INVALID);
+        }
+        // 商家券必须限定在对应店铺使用
+        if (coupon.getScope() == 2 && !coupon.getShopId().equals(orderShopId)) {
+            throw new BizException(ErrorCode.COUPON_SCOPE_MISMATCH);
+        }
+        // 门槛：订单金额必须达到满减门槛
+        if (totalAmount.compareTo(coupon.getThresholdAmount()) < 0) {
+            throw new BizException(ErrorCode.COUPON_THRESHOLD_NOT_MET);
+        }
+        // 计算优惠：满减取 min(满减金额, total)；折扣 = total × (100-折扣率)/100
+        BigDecimal discount;
+        if (coupon.getType() == 1) {
+            discount = coupon.getDiscountAmount().min(totalAmount);
+        } else {
+            int rate = coupon.getDiscountRate();
+            discount = totalAmount
+                    .multiply(BigDecimal.valueOf(100L - rate))
+                    .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+        }
+        // 兜底：优惠不能超过订单总额（保证支付金额不为负）
+        return discount.min(totalAmount);
+    }
+
+    /**
+     * 订单插入后核销用户券（幂等核心）：
+     * {@code UPDATE user_coupon SET status=2, order_id=?, used_time=NOW() WHERE id=? AND user_id=? AND status=1}。
+     *
+     * <p>并发下重复下单用同一张券只可能核销成功一次；0 行即券已被其他单占用/状态异常 → 抛不可用，
+     * 使本事务（含订单插入）整体回滚。</p>
+     */
+    private void useCoupon(Long userCouponId, Long userId, Long orderId) {
+        if (userCouponId == null) {
+            return;
+        }
+        int rows = userCouponMapper.update(null, Wrappers.<UserCoupon>lambdaUpdate()
+                .eq(UserCoupon::getId, userCouponId)
+                .eq(UserCoupon::getUserId, userId)
+                .eq(UserCoupon::getStatus, 1)
+                .set(UserCoupon::getStatus, 2)
+                .set(UserCoupon::getOrderId, orderId)
+                .set(UserCoupon::getUsedTime, LocalDateTime.now()));
+        if (rows == 0) {
+            throw new BizException(ErrorCode.COUPON_INVALID);
+        }
     }
 
     // ---------------- 详情 ----------------
@@ -331,6 +418,32 @@ public class OrderServiceImpl implements OrderService {
         }
         // 店铺月销回减
         shopMapper.addMonthlySales(order.getShopId(), -items.stream().mapToInt(OrderItem::getQuantity).sum());
+        // 退券：把本订单核销的券退回为未使用，可再次使用。
+        //    先按 order_id 查出已核销（status=2）的券，再条件更新 status=2→1 并清空 order_id/used_time；
+        //    条件更新 0 行说明已退过/并发已处理，忽略即可（幂等，与回补库存在同一事务保证一致性）。
+        returnCoupons(order.getId());
+    }
+
+    /**
+     * 取消后退券：将绑定到该订单的已使用券（status=2）退回为未使用（status=1）。
+     */
+    private void returnCoupons(Long orderId) {
+        List<UserCoupon> usedCoupons = userCouponMapper.selectList(
+                Wrappers.<UserCoupon>lambdaQuery()
+                        .eq(UserCoupon::getOrderId, orderId)
+                        .eq(UserCoupon::getStatus, 2));
+        for (UserCoupon uc : usedCoupons) {
+            int rows = userCouponMapper.update(null, Wrappers.<UserCoupon>lambdaUpdate()
+                    .eq(UserCoupon::getId, uc.getId())
+                    .eq(UserCoupon::getStatus, 2)
+                    .set(UserCoupon::getStatus, 1)
+                    .set(UserCoupon::getOrderId, null)
+                    .set(UserCoupon::getUsedTime, null));
+            // 0 行说明已被并发处理/已退回，忽略即可
+            if (rows == 0) {
+                return;
+            }
+        }
     }
 
     // ---------------- 支付 ----------------
@@ -515,6 +628,8 @@ public class OrderServiceImpl implements OrderService {
         vo.setStatusDesc(status == null ? "未知状态" : status.getDesc());
         vo.setTotalAmount(order.getTotalAmount());
         vo.setDiscountAmount(order.getDiscountAmount());
+        // 补显示用的券名：通过订单关联的 user_coupon（order_id 反查）拿券模板名
+        vo.setCouponName(resolveCouponName(order.getId()));
         vo.setPayAmount(order.getPayAmount());
         vo.setReceiverName(order.getReceiverName());
         vo.setReceiverPhone(order.getReceiverPhone());
@@ -531,6 +646,19 @@ public class OrderServiceImpl implements OrderService {
                     .stream().map(this::toItemVO).toList());
         }
         return vo;
+    }
+
+    /**
+     * 通过订单ID反查其关联的优惠券名称；未用券或查不到返回 null。
+     */
+    private String resolveCouponName(Long orderId) {
+        UserCoupon uc = userCouponMapper.selectOne(
+                Wrappers.<UserCoupon>lambdaQuery().eq(UserCoupon::getOrderId, orderId).last("limit 1"));
+        if (uc == null) {
+            return null;
+        }
+        Coupon coupon = couponMapper.selectById(uc.getCouponId());
+        return coupon == null ? null : coupon.getCouponName();
     }
 
     /**
