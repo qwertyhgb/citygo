@@ -35,6 +35,8 @@ import com.citygo.order.vo.OrderVO;
 import com.citygo.product.entity.Product;
 import com.citygo.product.mapper.ProductMapper;
 import com.citygo.product.service.ProductService;
+import com.citygo.search.service.ProductSearchService;
+import com.citygo.search.support.SearchSync;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -71,6 +73,8 @@ public class OrderServiceImpl implements OrderService {
     private final RabbitTemplate rabbitTemplate;
     private final CouponMapper couponMapper;
     private final UserCouponMapper userCouponMapper;
+    private final ProductSearchService productSearchService;
+    private final SearchSync searchSync;
 
     /** 订单超时分钟数：下单后发送 TTL 延迟消息的时长 */
     private final long timeoutMinutes;
@@ -87,6 +91,8 @@ public class OrderServiceImpl implements OrderService {
                             RabbitTemplate rabbitTemplate,
                             CouponMapper couponMapper,
                             UserCouponMapper userCouponMapper,
+                            ProductSearchService productSearchService,
+                            SearchSync searchSync,
                             @Value("${citygo.order.timeout-minutes:30}") long timeoutMinutes) {
         this.ordersMapper = ordersMapper;
         this.orderItemMapper = orderItemMapper;
@@ -100,6 +106,8 @@ public class OrderServiceImpl implements OrderService {
         this.rabbitTemplate = rabbitTemplate;
         this.couponMapper = couponMapper;
         this.userCouponMapper = userCouponMapper;
+        this.productSearchService = productSearchService;
+        this.searchSync = searchSync;
         this.timeoutMinutes = timeoutMinutes;
     }
 
@@ -218,6 +226,10 @@ public class OrderServiceImpl implements OrderService {
         //    生产可升级为"本地消息表 + 定时补偿"的最终一致方案，学习项目用 afterCommit 足够。
         //    顺序：先发 order.created，再发超时延迟消息。
         publishOrderCreatedAfterCommit(order);
+
+        // m. 下单后商品销量/库存已变（CAS 扣库存），近实时双写同步这些商品到 ES（销量排序需要最新）
+        searchSync.afterCommit(() -> productSearchService.syncProducts(
+                productMapper.selectByIds(productIds)));
 
         // j. 返回订单视图
         return toVO(order, true);

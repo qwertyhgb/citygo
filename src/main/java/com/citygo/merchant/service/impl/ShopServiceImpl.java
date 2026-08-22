@@ -12,6 +12,8 @@ import com.citygo.merchant.mapper.ShopMapper;
 import com.citygo.merchant.service.MerchantService;
 import com.citygo.merchant.service.ShopService;
 import com.citygo.merchant.vo.ShopVO;
+import com.citygo.search.service.ShopSearchService;
+import com.citygo.search.support.SearchSync;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,10 +33,15 @@ public class ShopServiceImpl implements ShopService {
 
     private final ShopMapper shopMapper;
     private final MerchantService merchantService;
+    private final ShopSearchService shopSearchService;
+    private final SearchSync searchSync;
 
-    public ShopServiceImpl(ShopMapper shopMapper, MerchantService merchantService) {
+    public ShopServiceImpl(ShopMapper shopMapper, MerchantService merchantService,
+                           ShopSearchService shopSearchService, SearchSync searchSync) {
         this.shopMapper = shopMapper;
         this.merchantService = merchantService;
+        this.shopSearchService = shopSearchService;
+        this.searchSync = searchSync;
     }
 
     /**
@@ -63,6 +70,7 @@ public class ShopServiceImpl implements ShopService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public ShopVO create(ShopCreateRequest request, Long currentUserId) {
         Merchant merchant = requireMerchant(currentUserId);
         Shop shop = new Shop();
@@ -82,6 +90,8 @@ public class ShopServiceImpl implements ShopService {
         shop.setMonthlySales(0);
         shop.setStatus(1);
         shopMapper.insert(shop);
+        // 双写同步 ES（事务提交后才同步，见 SearchSync）
+        syncShopAfterCommit(shop.getId());
         return toVO(shop);
     }
 
@@ -125,15 +135,27 @@ public class ShopServiceImpl implements ShopService {
             shop.setNotice(request.getNotice());
         }
         shopMapper.updateById(shop);
+        // 双写同步 ES（重读最新 score/monthlySales）
+        syncShopAfterCommit(id);
         return toVO(shop);
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void updateOpenStatus(Long id, ShopOpenStatusRequest request, Long currentUserId) {
         Merchant merchant = requireMerchant(currentUserId);
         Shop shop = requireOwnedShop(id, merchant.getId());
         shop.setOpenStatus(request.getOpenStatus());
         shopMapper.updateById(shop);
+        // openStatus 变化 → 同步 ES
+        syncShopAfterCommit(id);
+    }
+
+    /**
+     * 事务提交后把店铺最新数据同步到 ES（主库为准，失败仅记 ERROR）。
+     */
+    private void syncShopAfterCommit(Long shopId) {
+        searchSync.afterCommit(() -> shopSearchService.syncShop(shopMapper.selectById(shopId)));
     }
 
     @Override

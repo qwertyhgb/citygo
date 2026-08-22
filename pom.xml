@@ -136,6 +136,13 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-amqp</artifactId>
         </dependency>
+        <!-- Elasticsearch：本阶段用于商品/店铺全文搜索（ES 为搜索索引，MySQL 为主存储）。
+             Spring Boot 4.1.1 BOM 已包含 Spring Data Elasticsearch 6.1.0，兼容 ES 9.4.2。
+             版本由 BOM 统一管理，不写 version。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-elasticsearch</artifactId>
+        </dependency>
         <!-- jjwt：JWT 生成/解析。按官方推荐拆为三部分：
              jjwt-api 编译期使用（Jwts/JwtParserBuilder 等）；
              jjwt-impl 与 jjwt-jackson 仅在运行期加载（实现与 JSON 序列化）。 -->

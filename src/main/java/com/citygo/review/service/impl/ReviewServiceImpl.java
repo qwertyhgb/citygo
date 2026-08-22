@@ -19,6 +19,8 @@ import com.citygo.review.mapper.ReviewMapper;
 import com.citygo.review.service.ReviewService;
 import com.citygo.review.vo.ReviewVO;
 import com.citygo.shop.service.ShopBrowseService;
+import com.citygo.search.service.ShopSearchService;
+import com.citygo.search.support.SearchSync;
 import com.citygo.user.entity.User;
 import com.citygo.user.mapper.UserMapper;
 import org.springframework.dao.DuplicateKeyException;
@@ -53,19 +55,25 @@ public class ReviewServiceImpl implements ReviewService {
     private final UserMapper userMapper;
     private final MerchantService merchantService;
     private final ShopBrowseService shopBrowseService;
+    private final ShopSearchService shopSearchService;
+    private final SearchSync searchSync;
 
     public ReviewServiceImpl(ReviewMapper reviewMapper,
                              OrdersMapper ordersMapper,
                              ShopMapper shopMapper,
                              UserMapper userMapper,
                              MerchantService merchantService,
-                             ShopBrowseService shopBrowseService) {
+                             ShopBrowseService shopBrowseService,
+                             ShopSearchService shopSearchService,
+                             SearchSync searchSync) {
         this.reviewMapper = reviewMapper;
         this.ordersMapper = ordersMapper;
         this.shopMapper = shopMapper;
         this.userMapper = userMapper;
         this.merchantService = merchantService;
         this.shopBrowseService = shopBrowseService;
+        this.shopSearchService = shopSearchService;
+        this.searchSync = searchSync;
     }
 
     @Override
@@ -110,6 +118,9 @@ public class ReviewServiceImpl implements ReviewService {
         }
         // f. 评分变了 → 失效店铺详情缓存（shopDetail 含 score，缓存必须联动）
         shopBrowseService.evictDetailCache(order.getShopId());
+        // f1. 评分变了 → 近实时同步店铺到 ES（评分排序需要最新）
+        searchSync.afterCommit(() -> shopSearchService.syncShop(
+                shopMapper.selectById(order.getShopId())));
         // g. 返回
         return toVO(review);
     }

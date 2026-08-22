@@ -29,6 +29,11 @@ spring:
           max-retries: 2
         # 重试耗尽后：false = 拒绝消息并不回队（进入 DLX/死信队列），而非无限重新入队。
         default-requeue-rejected: false
+  # Elasticsearch：商品/店铺全文搜索（本机 knowflow-elasticsearch 容器，带 IK 分词）
+  elasticsearch:
+    # SB3+ 配置前缀为 spring.elasticsearch.uris（数组写法）
+    uris:
+      - http://localhost:9200
 
 # MyBatis-Plus 配置
 mybatis-plus:

@@ -21,6 +21,8 @@ import com.citygo.product.entity.Product;
 import com.citygo.product.mapper.ProductMapper;
 import com.citygo.product.service.ProductService;
 import com.citygo.product.vo.ProductVO;
+import com.citygo.search.service.ProductSearchService;
+import com.citygo.search.support.SearchSync;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -72,6 +74,8 @@ public class ProductServiceImpl implements ProductService {
     private final StringRedisTemplate stringRedisTemplate;
     private final RedisLockUtil redisLockUtil;
     private final JsonMapper jsonMapper;
+    private final ProductSearchService productSearchService;
+    private final SearchSync searchSync;
 
     public ProductServiceImpl(ProductMapper productMapper,
                               CategoryMapper categoryMapper,
@@ -80,7 +84,9 @@ public class ProductServiceImpl implements ProductService {
                               MerchantService merchantService,
                               StringRedisTemplate stringRedisTemplate,
                               RedisLockUtil redisLockUtil,
-                              JsonMapper jsonMapper) {
+                              JsonMapper jsonMapper,
+                              ProductSearchService productSearchService,
+                              SearchSync searchSync) {
         this.productMapper = productMapper;
         this.categoryMapper = categoryMapper;
         this.shopMapper = shopMapper;
@@ -89,6 +95,8 @@ public class ProductServiceImpl implements ProductService {
         this.stringRedisTemplate = stringRedisTemplate;
         this.redisLockUtil = redisLockUtil;
         this.jsonMapper = jsonMapper;
+        this.productSearchService = productSearchService;
+        this.searchSync = searchSync;
     }
 
     /**
@@ -116,6 +124,7 @@ public class ProductServiceImpl implements ProductService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public ProductVO create(ProductCreateRequest request, Long currentUserId) {
         Merchant merchant = requireMerchant(currentUserId);
         // 分类存在性校验
@@ -139,6 +148,8 @@ public class ProductServiceImpl implements ProductService {
         product.setStatus(1);
         product.setSales(0);
         productMapper.insert(product);
+        // 双写同步 ES
+        syncProductAfterCommit(product.getId());
         return toVO(product);
     }
 
@@ -164,10 +175,12 @@ public class ProductServiceImpl implements ProductService {
         product.setOriginalPrice(request.getOriginalPrice());
         productMapper.updateById(product);
         evictHotProductsCache();
+        syncProductAfterCommit(id);
         return toVO(product);
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     @CacheEvict(cacheNames = "productDetail", key = "#id")
     public void updateStatus(Long id, ProductStatusRequest request, Long currentUserId) {
         Merchant merchant = requireMerchant(currentUserId);
@@ -176,9 +189,12 @@ public class ProductServiceImpl implements ProductService {
         productMapper.updateById(product);
         // 上架/下架会改变热门商品范围，失效热门缓存
         evictHotProductsCache();
+        // 下架商品 ES 文档保留但 status=0（搜索过滤，便于重新上架），故仍同步
+        syncProductAfterCommit(id);
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     @CacheEvict(cacheNames = "productDetail", key = "#id")
     public void updateStock(Long id, ProductStockRequest request, Long currentUserId) {
         Merchant merchant = requireMerchant(currentUserId);
@@ -187,6 +203,14 @@ public class ProductServiceImpl implements ProductService {
         productMapper.updateById(product);
         // 商品数据变化，失效详情与热门缓存（保持写后一致性）
         evictHotProductsCache();
+        syncProductAfterCommit(id);
+    }
+
+    /**
+     * 事务提交后把商品最新数据同步到 ES（主库为准，失败仅记 ERROR）。
+     */
+    private void syncProductAfterCommit(Long productId) {
+        searchSync.afterCommit(() -> productSearchService.syncProduct(productMapper.selectById(productId)));
     }
 
     @Override
