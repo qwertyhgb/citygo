@@ -9,6 +9,11 @@ spring:
     # 与 dev 一致的取值策略：环境变量优先，默认值兜底
     username: citygo_user
     password: ${MYSQL_PASSWORD:Citygo@2026}
+  # Redis：测试环境连接本机 Redis（默认 localhost:6379）
+  data:
+    redis:
+      host: localhost
+      port: 6379
 
 # MyBatis-Plus 配置
 mybatis-plus:
@@ -28,3 +33,11 @@ mybatis-plus:
 logging:
   level:
     root: info
+
+# JWT 配置（测试环境取值与 dev 保持一致，便于集成测试；生产通过环境变量覆盖）
+citygo:
+  jwt:
+    # HS256 密钥，>= 32 字节；仅用于开发/测试，生产必须走环境变量
+    secret: citygo-dev-secret-key-please-change-in-prod-0123456789
+    # token 有效期（秒）
+    expire-seconds: 86400

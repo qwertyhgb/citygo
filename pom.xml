@@ -99,6 +99,39 @@
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-mysql</artifactId>
         </dependency>
+
+        <!-- Spring Security：提供认证与授权能力，配合 JWT + Redis 实现无状态登录态管理。
+             版本由 Spring Boot BOM 统一管理，不写 version。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <!-- Spring Data Redis：本阶段用于存储登录态（token -> userId），
+             版本由 Spring Boot BOM 统一管理，不写 version。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <!-- jjwt：JWT 生成/解析。按官方推荐拆为三部分：
+             jjwt-api 编译期使用（Jwts/JwtParserBuilder 等）；
+             jjwt-impl 与 jjwt-jackson 仅在运行期加载（实现与 JSON 序列化）。 -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>0.13.0</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>0.13.0</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>0.13.0</version>
+            <scope>runtime</scope>
+        </dependency>
     </dependencies>
 
     <build>
