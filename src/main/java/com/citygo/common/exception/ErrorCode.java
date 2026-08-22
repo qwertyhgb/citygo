@@ -64,7 +64,15 @@ public enum ErrorCode {
     CATEGORY_NOT_FOUND(404, "分类不存在"),
 
     /** 尝试操作不属于当前商家的资源（越权） */
-    UNAUTHORIZED_OPERATION(403, "无权操作该资源");
+    UNAUTHORIZED_OPERATION(403, "无权操作该资源"),
+
+    // ---------------- Phase 6 收货地址/购物车错误码 ----------------
+
+    /** 按地址ID未查到收货地址 */
+    ADDRESS_NOT_FOUND(404, "地址不存在"),
+
+    /** 对已下架商品操作（加购/下单） */
+    PRODUCT_OFF_SHELF(409, "商品已下架");
 
     /** 业务错误码 */
     private final int code;
