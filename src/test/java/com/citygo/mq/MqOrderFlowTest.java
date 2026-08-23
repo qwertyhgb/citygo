@@ -1,6 +1,5 @@
 package com.citygo.mq;
 
-import com.citygo.merchant.entity.Shop;
 import com.citygo.merchant.mapper.ShopMapper;
 import com.citygo.mq.message.OrderMessage;
 import com.citygo.order.mapper.OrdersMapper;

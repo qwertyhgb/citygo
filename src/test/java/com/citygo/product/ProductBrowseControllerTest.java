@@ -87,6 +87,7 @@ class ProductBrowseControllerTest {
         JsonNode records = objectMapper.readTree(body).path("data").path("records");
         org.junit.jupiter.api.Assertions.assertEquals(2, records.size());
         org.junit.jupiter.api.Assertions.assertEquals(p2, records.get(0).path("id").asLong());
+        org.junit.jupiter.api.Assertions.assertEquals(p1, records.get(1).path("id").asLong());
     }
 
     /**

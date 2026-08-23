@@ -67,6 +67,7 @@ class ShopBrowseControllerTest {
         org.junit.jupiter.api.Assertions.assertTrue(records.size() >= 2);
         // 后插入的 id 更大，应排在前面
         org.junit.jupiter.api.Assertions.assertEquals(s2, records.get(0).path("id").asLong());
+        org.junit.jupiter.api.Assertions.assertEquals(s1, records.get(1).path("id").asLong());
     }
 
     /**

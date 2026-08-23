@@ -1,9 +1,6 @@
 package com.citygo.coupon;
 
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.citygo.coupon.entity.Coupon;
 import com.citygo.coupon.entity.UserCoupon;
-import com.citygo.coupon.mapper.CouponMapper;
 import com.citygo.coupon.mapper.UserCouponMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -36,9 +33,6 @@ class OrderCouponTest {
 
     @Autowired
     private UserCouponMapper userCouponMapper;
-
-    @Autowired
-    private CouponMapper couponMapper;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 

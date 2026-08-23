@@ -3,7 +3,6 @@ package com.citygo.search.service.impl;
 import co.elastic.clients.elasticsearch._types.SortOptions;
 import co.elastic.clients.elasticsearch._types.SortOrder;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.citygo.category.entity.Category;
 import com.citygo.category.mapper.CategoryMapper;
 import com.citygo.common.page.PageVO;
@@ -28,7 +27,6 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**

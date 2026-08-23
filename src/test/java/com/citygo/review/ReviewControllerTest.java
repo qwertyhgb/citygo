@@ -1,8 +1,6 @@
 package com.citygo.review;
 
-import com.citygo.merchant.entity.Shop;
 import com.citygo.merchant.mapper.ShopMapper;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -291,7 +289,7 @@ class ReviewControllerTest {
         String merchantA = registerMerchant("pa" + uniqueSuffix());
         long shopA = createShop(merchantA);
         String merchantB = registerMerchant("pb" + uniqueSuffix());
-        long shopB = createShop(merchantB);
+        createShop(merchantB);
         long productA = createProduct(merchantA, shopA, "A店菜", 50);
         String user = register("pu" + uniqueSuffix());
         long addrId = createAddress(user);

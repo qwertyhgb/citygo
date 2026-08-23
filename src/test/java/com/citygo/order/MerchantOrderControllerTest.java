@@ -115,7 +115,7 @@ class MerchantOrderControllerTest {
      */
     @Test
     void merchant_orders_list() throws Exception {
-        long orderId = createPaidOrderAndReturnId();
+        createPaidOrderAndReturnId();
         mockMvc.perform(get("/api/orders/merchant")
                         .header("Authorization", "Bearer " + lastMerchantToken))
                 .andExpect(status().isOk())

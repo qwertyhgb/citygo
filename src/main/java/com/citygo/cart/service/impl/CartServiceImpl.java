@@ -1,6 +1,5 @@
 package com.citygo.cart.service.impl;
 
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.citygo.cart.service.CartService;
 import com.citygo.cart.vo.CartItemVO;
 import com.citygo.common.exception.BizException;
