@@ -43,4 +43,35 @@ public interface ProductMapper extends BaseMapper<Product> {
     @Update("UPDATE product SET stock = stock + #{quantity}, sales = sales - #{quantity} WHERE id = #{id}")
     int restoreStock(@Param("id") Long id, @Param("quantity") int quantity);
 
+    /**
+     * 条件原子扣减秒杀库存（防超卖兜底）。
+     *
+     * @param id       商品ID
+     * @param quantity 扣减数量（通常为 1）
+     * @return 受影响行数；0 表示秒杀库存不足或商品不存在
+     */
+    @Update("UPDATE product SET seckill_stock = seckill_stock - #{quantity} " +
+            "WHERE id = #{id} AND seckill_stock >= #{quantity}")
+    int deductSeckillStock(@Param("id") Long id, @Param("quantity") int quantity);
+
+    /**
+     * 回补秒杀库存（取消秒杀订单时）：秒杀库存加回、销量扣回。
+     *
+     * @param id       商品ID
+     * @param quantity 回补数量
+     * @return 受影响行数
+     */
+    @Update("UPDATE product SET seckill_stock = seckill_stock + #{quantity}, sales = sales - #{quantity} WHERE id = #{id}")
+    int restoreSeckillStock(@Param("id") Long id, @Param("quantity") int quantity);
+
+    /**
+     * 累加商品销量。
+     *
+     * @param id       商品ID
+     * @param quantity 累加销量
+     * @return 受影响行数
+     */
+    @Update("UPDATE product SET sales = sales + #{quantity} WHERE id = #{id}")
+    int addSales(@Param("id") Long id, @Param("quantity") int quantity);
+
 }

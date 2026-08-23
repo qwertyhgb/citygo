@@ -529,6 +529,10 @@ public class ProductServiceImpl implements ProductService {
         vo.setImages(product.getImages());
         vo.setPrice(product.getPrice());
         vo.setOriginalPrice(product.getOriginalPrice());
+        vo.setSeckillPrice(product.getSeckillPrice());
+        vo.setSeckillStock(product.getSeckillStock());
+        vo.setSeckillStart(product.getSeckillStart());
+        vo.setSeckillEnd(product.getSeckillEnd());
         vo.setStock(product.getStock());
         vo.setSales(product.getSales());
         vo.setStatus(product.getStatus());

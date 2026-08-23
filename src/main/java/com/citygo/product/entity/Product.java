@@ -46,6 +46,18 @@ public class Product {
     /** 原价（划线价） */
     private BigDecimal originalPrice;
 
+    /** 秒杀价（NULL 表示不参与秒杀） */
+    private BigDecimal seckillPrice;
+
+    /** 秒杀库存（NULL 表示不参与秒杀） */
+    private Integer seckillStock;
+
+    /** 秒杀开始时间 */
+    private LocalDateTime seckillStart;
+
+    /** 秒杀结束时间 */
+    private LocalDateTime seckillEnd;
+
     /** 库存 */
     private Integer stock;
 

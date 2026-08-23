@@ -32,6 +32,9 @@ public class OrderVO {
     /** 订单状态描述 */
     private String statusDesc;
 
+    /** 订单来源：1 普通 2 秒杀 */
+    private Integer source;
+
     /** 商品总额 */
     private BigDecimal totalAmount;
 

@@ -128,7 +128,24 @@ public enum ErrorCode {
     REVIEW_ALREADY_EXISTS(409, "该订单已评价"),
 
     /** 按评价ID未查到大评价 */
-    REVIEW_NOT_FOUND(404, "评价不存在");
+    REVIEW_NOT_FOUND(404, "评价不存在"),
+
+    // ---------------- Phase 11 秒杀域错误码 ----------------
+
+    /** 商品未开启或未配置秒杀 */
+    SELL_NOT_AVAILABLE(409, "该商品未参与秒杀"),
+
+    /** 秒杀活动未开始 */
+    SELL_NOT_STARTED(409, "秒杀未开始"),
+
+    /** 秒杀活动已结束 */
+    SELL_ENDED(409, "秒杀已结束"),
+
+    /** 用户重复抢购（一人一单） */
+    SELL_REPEAT(409, "每人限购一件，请勿重复抢购"),
+
+    /** 秒杀库存已售罄 */
+    SELL_OUT(409, "手慢了，商品已抢完");
 
     /** 业务错误码 */
     private final int code;

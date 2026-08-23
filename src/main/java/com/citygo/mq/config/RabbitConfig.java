@@ -158,4 +158,24 @@ public class RabbitConfig {
         return BindingBuilder.bind(orderTimeoutQueue()).to(orderDlxExchange()).with("timeout");
     }
 
+    // ==================== 四、秒杀异步下单（Direct：seckill.order） ====================
+
+    /** 秒杀订单交换机（Direct）。routing key = seckill.order，投递给秒杀异步下单队列。 */
+    @Bean
+    public DirectExchange seckillOrderExchange() {
+        return new DirectExchange("citygo.seckill.order.exchange", true, false);
+    }
+
+    /** 秒杀异步下单队列：秒杀消费者监听。 */
+    @Bean
+    public Queue seckillOrderQueue() {
+        return new Queue("citygo.seckill.order.queue", true);
+    }
+
+    /** 绑定：秒杀交换机 → 秒杀队列，routing key = seckill.order。 */
+    @Bean
+    public Binding seckillOrderBinding() {
+        return BindingBuilder.bind(seckillOrderQueue()).to(seckillOrderExchange()).with("seckill.order");
+    }
+
 }

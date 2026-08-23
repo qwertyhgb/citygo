@@ -24,6 +24,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.citygo.seckill.dto.SeckillConfigRequest;
+import com.citygo.seckill.service.SeckillService;
+
 /**
  * 商品管理接口（仅商家可用）。
  */
@@ -34,9 +37,20 @@ import org.springframework.web.bind.annotation.RestController;
 public class ProductController {
 
     private final ProductService productService;
+    private final SeckillService seckillService;
 
-    public ProductController(ProductService productService) {
+    public ProductController(ProductService productService, SeckillService seckillService) {
         this.productService = productService;
+        this.seckillService = seckillService;
+    }
+
+    /**
+     * 商家配置秒杀。
+     */
+    @Operation(summary = "商家配置秒杀")
+    @PostMapping("/{id}/seckill")
+    public Result<ProductVO> configSeckill(@PathVariable Long id, @Valid @RequestBody SeckillConfigRequest request) {
+        return Result.success(seckillService.configSeckill(id, request, currentUserId()));
     }
 
     /**

@@ -25,6 +25,7 @@ import com.citygo.order.dto.OrderItemRequest;
 import com.citygo.order.entity.OrderItem;
 import com.citygo.order.entity.Orders;
 import com.citygo.order.entity.Payment;
+import com.citygo.order.enums.OrderSource;
 import com.citygo.order.enums.OrderStatus;
 import com.citygo.order.mapper.OrderItemMapper;
 import com.citygo.order.mapper.OrdersMapper;
@@ -39,6 +40,7 @@ import com.citygo.search.service.ProductSearchService;
 import com.citygo.search.support.SearchSync;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -75,6 +77,7 @@ public class OrderServiceImpl implements OrderService {
     private final UserCouponMapper userCouponMapper;
     private final ProductSearchService productSearchService;
     private final SearchSync searchSync;
+    private final StringRedisTemplate stringRedisTemplate;
 
     /** 订单超时分钟数：下单后发送 TTL 延迟消息的时长 */
     private final long timeoutMinutes;
@@ -93,6 +96,7 @@ public class OrderServiceImpl implements OrderService {
                             UserCouponMapper userCouponMapper,
                             ProductSearchService productSearchService,
                             SearchSync searchSync,
+                            StringRedisTemplate stringRedisTemplate,
                             @Value("${citygo.order.timeout-minutes:30}") long timeoutMinutes) {
         this.ordersMapper = ordersMapper;
         this.orderItemMapper = orderItemMapper;
@@ -108,6 +112,7 @@ public class OrderServiceImpl implements OrderService {
         this.userCouponMapper = userCouponMapper;
         this.productSearchService = productSearchService;
         this.searchSync = searchSync;
+        this.stringRedisTemplate = stringRedisTemplate;
         this.timeoutMinutes = timeoutMinutes;
     }
 
@@ -169,6 +174,7 @@ public class OrderServiceImpl implements OrderService {
         order.setDiscountAmount(discount);
         order.setPayAmount(totalAmount.subtract(discount));
         order.setStatus(OrderStatus.PENDING_PAYMENT.getCode());
+        order.setSource(OrderSource.NORMAL.getCode());
         // 快照意义：收货地址后续被用户修改，本订单仍展示下单时的地址
         order.setReceiverName(address.getReceiverName());
         order.setReceiverPhone(address.getReceiverPhone());
@@ -422,11 +428,21 @@ public class OrderServiceImpl implements OrderService {
         if (rows == 0) {
             throw new BizException(ErrorCode.ORDER_STATUS_INVALID);
         }
-        // 回补库存：取消回补是"只增不减"方向，直接加回不会超卖
+        // 回补库存：根据订单来源区分
+        //    source=2（秒杀订单）：回补 seckill_stock 与销量，并 Redis INCR citygo:seckill:stock:{productId}
+        //    source=1（普通订单）：回补普通库存与销量
+        //    说明：一人一单 Redis key (citygo:seckill:user:{productId}:{userId}) 不删，
+        //    防止用户取消后再抢，符合秒杀业务惯例（"取消后本轮秒杀不可再抢"）。
+        boolean isSeckill = Integer.valueOf(OrderSource.SECKILL.getCode()).equals(order.getSource());
         List<OrderItem> items = orderItemMapper.selectList(
                 Wrappers.<OrderItem>lambdaQuery().eq(OrderItem::getOrderId, order.getId()));
         for (OrderItem item : items) {
-            productMapper.restoreStock(item.getProductId(), item.getQuantity());
+            if (isSeckill) {
+                productMapper.restoreSeckillStock(item.getProductId(), item.getQuantity());
+                stringRedisTemplate.opsForValue().increment("citygo:seckill:stock:" + item.getProductId(), item.getQuantity());
+            } else {
+                productMapper.restoreStock(item.getProductId(), item.getQuantity());
+            }
         }
         // 店铺月销回减
         shopMapper.addMonthlySales(order.getShopId(), -items.stream().mapToInt(OrderItem::getQuantity).sum());
@@ -649,6 +665,7 @@ public class OrderServiceImpl implements OrderService {
         vo.setStatus(order.getStatus());
         OrderStatus status = OrderStatus.fromCode(order.getStatus());
         vo.setStatusDesc(status == null ? "未知状态" : status.getDesc());
+        vo.setSource(order.getSource() != null ? order.getSource() : OrderSource.NORMAL.getCode());
         vo.setTotalAmount(order.getTotalAmount());
         vo.setDiscountAmount(order.getDiscountAmount());
         // 补显示用的券名：通过订单关联的 user_coupon（order_id 反查）拿券模板名

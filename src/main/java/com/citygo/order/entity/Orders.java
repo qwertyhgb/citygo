@@ -40,6 +40,9 @@ public class Orders {
     /** 订单状态：10 待支付 20 已支付 30 商家已接单 40 配送中 50 已完成 60 已取消 70 退款中 80 已退款 */
     private Integer status;
 
+    /** 订单来源：1 普通 2 秒杀 */
+    private Integer source;
+
     /** 收货人姓名（下单时快照） */
     private String receiverName;
 
