@@ -32,9 +32,27 @@ build/
 ### VS Code ###
 .vscode/
 
+### AI 工具本地目录 ###
+.workbuddy/
+.qoder/
+.claude/
+.aider*
+.copilot/
+.cursor/
+
 ### CityGo 补充 ###
 logs/
 *.log
+
+# 环境变量：.env 及其变体（.env.local / .env.dev 等），密钥不得入库
 .env
+.env.*
+!.env.example
+
 node_modules/
+
+# OS 系统文件
 .DS_Store
+Thumbs.db
+desktop.ini
+Desktop.ini
