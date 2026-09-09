@@ -125,20 +125,27 @@ CityGo 同时存在**两套缓存体系**，失效方式完全不同，这是最
 - `ShopServiceImpl.update` 标 `@CacheEvict("shopDetail")`，店铺信息改了立即失效店铺详情缓存。
 - **旁路写操作的失效**：`OrderServiceImpl` 下单扣库存走的是 `ProductMapper.deductStock`（自定义 SQL），**绕过了 ProductService**，所以 `ProductServiceImpl` 提供了空方法体的 `evictProductDetail(Long productId)`（标 `@CacheEvict`），由下单成功方主动调用，保证写后缓存一致。这是"缓存失效入口"的经典设计：**谁做了旁路写，谁负责通知失效**。
 
-### d6. RateLimitAspect：固定窗口限流
+### d6. RateLimitAspect：固定窗口限流（Lua 原子自增 + 真实 IP 解析）
 
 `@RateLimit` 注解（`limit` 默认 10、`windowSeconds` 默认 1）配合 `RateLimitAspect` 切面，给接口加"1 秒最多 10 次"的配额。切面逻辑：
 
-1. 拼 key：`citygo:rate:{subject}:{类名.方法名}`。`subject` 优先取登录用户 id（`SecurityContextHolder` 里的 `principal` 是 `Long`），未登录则退化为 `request.getRemoteAddr()` 客户端 IP——**既能按用户限，也能兜底按 IP 限**。方法维度用 `类名.方法名` 区分，避免同用户不同接口互相挤占配额。
-2. `opsForValue().increment(key)` 原子自增计数；
-3. 首次 `INCR` 返回 1 时，说明这是窗口内第一个请求，`expire(key, windowSeconds)` 开启窗口；
-4. 计数 `> limit` 就抛 `BizException(ErrorCode.TOO_MANY_REQUESTS)`，对应 HTTP 429。
+1. **客户端主体判定（支持反向代理）**：拼 key `citygo:rate:{subject}:{类名.方法名}`。`subject` 优先取已认证 `userId`，未登录时通过 `clientIp()` 依次解析 `X-Forwarded-For`、`X-Real-IP` 头（取第一个非空真实 IP），兜底才用 `request.getRemoteAddr()`——**防止 Nginx 反向代理下所有请求被判定为同一网关 IP 而误限流**；
+2. **Lua 脚本原子计数与设过期**：
+   ```lua
+   local count = redis.call('incr', KEYS[1])
+   if count == 1 then
+       redis.call('expire', KEYS[1], ARGV[1])
+   end
+   return count
+   ```
+   **为什么必须用 Lua 脚本**：如果先 `incr`，再在 Java 代码里 `expire`，在两者之间若 JVM 进程崩溃、网络中断或重启，该 key 将永远没有过期时间（变成**永久死 key**），导致用户永远被拦截。Lua 脚本保证了 `INCR` 和首次 `EXPIRE` 的**绝对原子性**；
+3. 计数 `> limit` 则抛 `BizException(ErrorCode.TOO_MANY_REQUESTS)`，对应 HTTP 429。
 
-**坑在哪**：切面注释里点破了固定窗口的缺陷——**窗口边界毛刺**。比如 1 秒窗口，请求集中在前 1 秒的末尾 0.5 秒 + 后 1 秒的开头 0.5 秒，实际上在 1 秒内放行了 2 倍配额。生产更平滑的替代是滑动窗口或令牌桶，但固定窗口胜在实现最简单、Redis 只需一个 key 一次 INCR。
+**坑在哪**：切面注释里点破了固定窗口的缺陷——**窗口边界毛刺**。比如 1 秒窗口，请求集中在前 1 秒的末尾 0.5 秒 + 后 1 秒的开头 0.5 秒，实际上在 1 秒内放行了 2 倍配额。生产更平滑的替代是滑动窗口或令牌桶，但固定窗口胜在实现最简单、Redis 单个 key 配合 Lua 脚本即可搞定。
 
 ### d7. 登录态 Redis：为什么 JWT 无状态还要 Redis
 
-这不是缓存，但同属"Redis 的进阶用法"。`JwtAuthenticationFilter` 拿到 Bearer token 后，先 `jwtUtil.parseUserId(token)` 解析签名，**再查 `citygo:login:token:{token}` 是否存在**——只有 JWT 有效**且** Redis 里有对应登录态，才认证通过。
+这不是缓存，但同属"Redis 的进阶用法"。`JwtAuthenticationFilter` 拿到 Bearer token 后，先 `jwtUtil.parseUserId(token)` 解析签名，**再查 `citygo:login:token:{token}` 是否存在**——只有 JWT 有效**且** Redis 里有对应登录态，才认证通过。存的值是 `userId:ROLE1,ROLE2` 格式，过滤器顺带从冒号后解析角色，**请求链路零查库**（角色加载不需要再查 user_role/role 表，详见 03 篇）。
 
 **为什么 JWT 本身无状态还要 Redis**：JWT 签发后无法主动作废，用户改了密码、被封号、或主动登出后，旧 token 在过期前依然"合法"。用 Redis 存一份登录态，**登出时直接删 key**（`AuthServiceImpl` 登出逻辑），旧 token 立刻失效——这就是"无状态 JWT + 有状态 Redis"的组合拳：JWT 负责自包含、免查库，Redis 负责可撤销、可强制下线。TTL 与 JWT 有效期一致，登录时写入、登出时删除。
 
