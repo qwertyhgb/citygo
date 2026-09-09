@@ -2,6 +2,7 @@ package com.citygo.shop.controller;
 
 import com.citygo.common.page.PageVO;
 import com.citygo.common.result.Result;
+import com.citygo.product.dto.ProductBrowseQuery;
 import com.citygo.product.service.ProductService;
 import com.citygo.product.vo.ProductVO;
 import com.citygo.shop.dto.ShopBrowseQuery;
@@ -61,10 +62,13 @@ public class ShopBrowseController {
             @PathVariable Long id,
             @RequestParam(defaultValue = "1") long pageNum,
             @RequestParam(defaultValue = "10") long pageSize) {
-        // 先校验店铺存在且正常，再按 shopId 分页查上架商品
+        // 先校验店铺存在且正常，再按 shopId 分页查上架商品（默认排序）
         shopBrowseService.requireEnabledShop(id);
-        return Result.success(productService.pagePublic(id, null, null, null, null,
-                "default", pageNum, pageSize));
+        ProductBrowseQuery query = new ProductBrowseQuery();
+        query.setShopId(id);
+        query.setPageNum(pageNum);
+        query.setPageSize(pageSize);
+        return Result.success(productService.pagePublic(query));
     }
 
 }

@@ -241,4 +241,40 @@ class CouponControllerTest {
                 .andExpect(jsonPath("$.data.records[0].status").value(3));
     }
 
+    /**
+     * 场景：perUserLimit=2 时，同一用户可成功领取 2 张券，领第 3 张时被拦截。
+     */
+    @Test
+    void claim_multi_coupons_success_when_limit_is_two() throws Exception {
+        String merchant = registerMerchant("cm2" + uniqueSuffix());
+        long shopId = createShop(merchant);
+        String couponJson = "{\"couponName\":\"每人限领两张券" + uniqueSuffix() + "\",\"type\":1,"
+                + "\"thresholdAmount\":50.00,\"discountAmount\":10.00,"
+                + "\"totalCount\":10,\"perUserLimit\":2,"
+                + "\"validStart\":\"2020-01-01T00:00:00\",\"validEnd\":\"2099-12-31T23:59:59\","
+                + "\"scope\":2,\"shopId\":" + shopId + "}";
+        String created = mockMvc.perform(post("/api/coupons")
+                        .header("Authorization", "Bearer " + merchant)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(couponJson))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        long couponId = objectMapper.readTree(created).path("data").path("id").asLong();
+
+        String user = register("u2limit" + uniqueSuffix());
+        // 领第 1 张：成功
+        mockMvc.perform(post("/api/coupons/" + couponId + "/claim").header("Authorization", "Bearer " + user))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+        // 领第 2 张：成功
+        mockMvc.perform(post("/api/coupons/" + couponId + "/claim").header("Authorization", "Bearer " + user))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+        // 领第 3 张：超出限领拦截 (409)
+        mockMvc.perform(post("/api/coupons/" + couponId + "/claim").header("Authorization", "Bearer " + user))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(409))
+                .andExpect(jsonPath("$.message").value("您已领取过该优惠券"));
+    }
+
 }

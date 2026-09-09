@@ -15,6 +15,7 @@ import com.citygo.user.entity.User;
 import com.citygo.user.mapper.UserMapper;
 import com.citygo.user.service.UserService;
 import com.citygo.user.vo.UserVO;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -64,11 +65,17 @@ public class MerchantServiceImpl implements MerchantService {
         user.setPassword(passwordEncoder.encode(request.getPassword()));
         user.setNickname(request.getMerchantName());
         user.setStatus(1);
-        userMapper.insert(user);
+        try {
+            userMapper.insert(user);
+        } catch (DuplicateKeyException e) {
+            // 并发注册兜底：与用户注册一致，前置查重与写入之间的时间窗内可能并发撞
+            // 唯一索引 uk_username，归一化为业务错误码 409
+            throw new BizException(ErrorCode.USERNAME_ALREADY_EXISTS);
+        }
 
         // 绑定 MERCHANT 角色
         Role role = roleMapper.selectOne(
-                Wrappers.<Role>lambdaQuery().eq(Role::getCode, "MERCHANT"));
+                Wrappers.<Role>lambdaQuery().eq(Role::getCode, Role.CODE_MERCHANT));
         if (role == null) {
             throw new BizException(ErrorCode.INTERNAL_ERROR);
         }

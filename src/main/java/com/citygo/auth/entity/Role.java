@@ -16,6 +16,18 @@ import java.time.LocalDateTime;
 @TableName("role")
 public class Role {
 
+    // ---------------- 角色编码常量：与 Flyway V2 迁移写入的种子数据保持一致 ----------------
+    // 统一收敛在此，避免各业务包散落魔法字符串；新增角色需先在迁移脚本中写入种子数据。
+
+    /** 普通用户 */
+    public static final String CODE_USER = "USER";
+
+    /** 商家 */
+    public static final String CODE_MERCHANT = "MERCHANT";
+
+    /** 平台管理员 */
+    public static final String CODE_ADMIN = "ADMIN";
+
     /** 主键（雪花ID） */
     @TableId(type = IdType.ASSIGN_ID)
     private Long id;

@@ -3,7 +3,9 @@ package com.citygo.order.controller;
 import com.citygo.common.annotation.IdempotentSubmit;
 import com.citygo.common.page.PageVO;
 import com.citygo.common.result.Result;
+import com.citygo.coupon.vo.UserCouponVO;
 import com.citygo.order.dto.OrderCreateRequest;
+import com.citygo.order.dto.OrderItemRequest;
 import com.citygo.order.service.OrderService;
 import com.citygo.order.vo.OrderVO;
 import io.swagger.v3.oas.annotations.Operation;
@@ -18,6 +20,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 /**
  * 用户端订单接口（下单/详情/我的/取消/支付，需登录）。
@@ -43,6 +47,19 @@ public class OrderController {
     @IdempotentSubmit
     public Result<OrderVO> create(@Valid @RequestBody OrderCreateRequest request) {
         return Result.success(orderService.create(request, currentUserId()));
+    }
+
+    /**
+     * 结算页可用优惠券匹配。
+     *
+     * <p>用 POST 携带商品明细：订单总额由服务端按 DB 实价计算（前端不复刻计价规则），
+     * 返回有效期/适用范围/门槛全部通过的本人未使用券，并带每张券的预估优惠金额。
+     * 需登录（券是用户级数据，anyRequest 兜底已覆盖，无需额外放行配置）。</p>
+     */
+    @Operation(summary = "结算可用优惠券")
+    @PostMapping("/usable-coupons")
+    public Result<List<UserCouponVO>> usableCoupons(@RequestBody List<OrderItemRequest> items) {
+        return Result.success(orderService.listUsableCoupons(items == null ? List.of() : items, currentUserId()));
     }
 
     /**

@@ -144,11 +144,13 @@ class ReviewControllerTest {
         long o1 = completeOrder(user, merchant, addrId, p1);
         review(o1, user, 5);
         assertEquals(0, new BigDecimal("5.0").compareTo(shopMapper.selectById(shopId).getScore()));
+        assertEquals(1, shopMapper.selectById(shopId).getReviewCount());
 
         long o2 = completeOrder(user, merchant, addrId, p2);
         review(o2, user, 3);
         BigDecimal score = shopMapper.selectById(shopId).getScore();
         assertEquals(0, new BigDecimal("4.0").compareTo(score), "两单平均应为 4.0，实际 " + score);
+        assertEquals(2, shopMapper.selectById(shopId).getReviewCount());
     }
 
     /**

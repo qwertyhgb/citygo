@@ -9,26 +9,21 @@ import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
-import java.time.Duration;
+import java.util.List;
 
 /**
- * 接口限流切面（固定窗口计数器实现）。
+ * 接口限流切面（固定窗口计数器实现，基于原子 Lua 脚本与反向代理 IP 解析）。
  *
- * <p>实现：以 {@code citygo:rate:{用户或IP}:{类名}.{方法名}} 为 key，用 {@code INCR} 计数，
- * 第一次 INCR 返回 1 时顺带 {@code EXPIRE windowSeconds} 开启窗口；计数 &gt; limit 则抛 429。</p>
- *
- * <p><b>常见限流算法对比（面试点）</b>：</p>
- * <ul>
- *   <li>固定窗口（本实现）：实现最简单，但窗口边界处可能出现"双倍流量"毛刺；</li>
- *   <li>滑动窗口：把窗口再切分成更细的子窗口，边界更平滑，代价是内存稍高；</li>
- *   <li>令牌桶/漏桶：以恒定速率放行，能平滑突发流量，适合做"匀速"限流。</li>
- * </ul>
+ * <p>实现：以 {@code citygo:rate:{用户或IP}:{类名}.{方法名}} 为 key，
+ * 通过 Lua 脚本原子执行 {@code INCR} + 首次 {@code EXPIRE windowSeconds}，杜绝非原子操作导致的死 key；
+ * 计数 &gt; limit 则抛 429。</p>
  */
 @Aspect
 @Component
@@ -36,6 +31,17 @@ public class RateLimitAspect {
 
     /** 限流 key 前缀 */
     private static final String KEY_PREFIX = "citygo:rate:";
+
+    /**
+     * 原子限流 Lua 脚本：自增并对首次自增设置过期时间。
+     */
+    private static final DefaultRedisScript<Long> RATE_LIMIT_SCRIPT = new DefaultRedisScript<>(
+            "local count = redis.call('incr', KEYS[1])\n" +
+            "if count == 1 then\n" +
+            "    redis.call('expire', KEYS[1], ARGV[1])\n" +
+            "end\n" +
+            "return count",
+            Long.class);
 
     private final StringRedisTemplate stringRedisTemplate;
 
@@ -53,11 +59,11 @@ public class RateLimitAspect {
         String subject = userId != null ? String.valueOf(userId) : clientIp();
         String key = KEY_PREFIX + subject + ":" + method;
 
-        Long count = stringRedisTemplate.opsForValue().increment(key);
-        // INCR 首次返回 1：说明是窗口内第一个请求，设置窗口过期时间
-        if (count != null && count == 1L) {
-            stringRedisTemplate.expire(key, Duration.ofSeconds(rateLimit.windowSeconds()));
-        }
+        Long count = stringRedisTemplate.execute(
+                RATE_LIMIT_SCRIPT,
+                List.of(key),
+                String.valueOf(rateLimit.windowSeconds()));
+
         if (count != null && count > rateLimit.limit()) {
             throw new BizException(ErrorCode.TOO_MANY_REQUESTS);
         }
@@ -75,6 +81,15 @@ public class RateLimitAspect {
     private String clientIp() {
         if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attrs) {
             HttpServletRequest request = attrs.getRequest();
+            String xff = request.getHeader("X-Forwarded-For");
+            if (xff != null && !xff.isBlank() && !"unknown".equalsIgnoreCase(xff)) {
+                int idx = xff.indexOf(',');
+                return idx != -1 ? xff.substring(0, idx).trim() : xff.trim();
+            }
+            String xRealIp = request.getHeader("X-Real-IP");
+            if (xRealIp != null && !xRealIp.isBlank() && !"unknown".equalsIgnoreCase(xRealIp)) {
+                return xRealIp.trim();
+            }
             return request.getRemoteAddr();
         }
         return "unknown";

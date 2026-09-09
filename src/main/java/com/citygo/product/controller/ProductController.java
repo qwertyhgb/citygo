@@ -3,6 +3,7 @@ package com.citygo.product.controller;
 import com.citygo.common.page.PageVO;
 import com.citygo.common.result.Result;
 import com.citygo.product.dto.ProductCreateRequest;
+import com.citygo.product.dto.ProductMyPageQuery;
 import com.citygo.product.dto.ProductStatusRequest;
 import com.citygo.product.dto.ProductStockRequest;
 import com.citygo.product.dto.ProductUpdateRequest;
@@ -15,13 +16,13 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.citygo.seckill.dto.SeckillConfigRequest;
@@ -45,12 +46,12 @@ public class ProductController {
     }
 
     /**
-     * 商家配置秒杀。
+     * 我的商品分页列表（可选店铺/模糊商品名过滤）。
      */
-    @Operation(summary = "商家配置秒杀")
-    @PostMapping("/{id}/seckill")
-    public Result<ProductVO> configSeckill(@PathVariable Long id, @Valid @RequestBody SeckillConfigRequest request) {
-        return Result.success(seckillService.configSeckill(id, request, currentUserId()));
+    @Operation(summary = "我的商品")
+    @GetMapping("/my")
+    public Result<PageVO<ProductVO>> pageMy(@ModelAttribute ProductMyPageQuery query) {
+        return Result.success(productService.pageMy(query, currentUserId()));
     }
 
     /**
@@ -92,16 +93,12 @@ public class ProductController {
     }
 
     /**
-     * 我的商品分页列表（可选店铺/模糊商品名过滤）。
+     * 商家配置秒杀。
      */
-    @Operation(summary = "我的商品")
-    @GetMapping("/my")
-    public Result<PageVO<ProductVO>> pageMy(
-            @RequestParam(required = false) Long shopId,
-            @RequestParam(required = false) String keyword,
-            @RequestParam(defaultValue = "1") long pageNum,
-            @RequestParam(defaultValue = "10") long pageSize) {
-        return Result.success(productService.pageMy(shopId, keyword, pageNum, pageSize, currentUserId()));
+    @Operation(summary = "商家配置秒杀")
+    @PostMapping("/{id}/seckill")
+    public Result<ProductVO> configSeckill(@PathVariable Long id, @Valid @RequestBody SeckillConfigRequest request) {
+        return Result.success(seckillService.configSeckill(id, request, currentUserId()));
     }
 
     /**

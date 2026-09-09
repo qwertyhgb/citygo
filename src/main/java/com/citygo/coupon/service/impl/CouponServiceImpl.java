@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.citygo.common.exception.BizException;
 import com.citygo.common.exception.ErrorCode;
 import com.citygo.common.page.PageVO;
+import com.citygo.common.redis.RedisLockUtil;
 import com.citygo.coupon.dto.CouponCreateRequest;
 import com.citygo.coupon.entity.Coupon;
 import com.citygo.coupon.entity.UserCoupon;
@@ -16,13 +17,13 @@ import com.citygo.coupon.vo.UserCouponVO;
 import com.citygo.merchant.entity.Merchant;
 import com.citygo.merchant.service.MerchantService;
 import com.citygo.merchant.service.ShopService;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -33,7 +34,7 @@ import java.util.stream.Collectors;
  * <ul>
  *   <li><b>领券防超发</b>：用 {@code UPDATE ... WHERE received_count < total_count} 条件更新，
  *       靠数据库原子性保证不会多发；</li>
- *   <li><b>防重复领取</b>：业务先查重 + 唯一索引 uk_user_coupon（user_id, coupon_id）兜底；</li>
+ *   <li><b>防重复与限领</b>：Redis 分布式锁 + 业务查重，兼容 per_user_limit 限制；</li>
  *   <li><b>下单核销</b>：条件更新 status=1→2 保幂等；</li>
  *   <li><b>取消退券</b>：条件更新 status=2→1 回退。</li>
  * </ul>
@@ -46,15 +47,18 @@ public class CouponServiceImpl implements CouponService {
     private final UserCouponMapper userCouponMapper;
     private final MerchantService merchantService;
     private final ShopService shopService;
+    private final RedisLockUtil redisLockUtil;
 
     public CouponServiceImpl(CouponMapper couponMapper,
                              UserCouponMapper userCouponMapper,
                              MerchantService merchantService,
-                             ShopService shopService) {
+                             ShopService shopService,
+                             RedisLockUtil redisLockUtil) {
         this.couponMapper = couponMapper;
         this.userCouponMapper = userCouponMapper;
         this.merchantService = merchantService;
         this.shopService = shopService;
+        this.redisLockUtil = redisLockUtil;
     }
 
     @Override
@@ -133,69 +137,61 @@ public class CouponServiceImpl implements CouponService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public UserCouponVO claim(Long couponId, Long currentUserId) {
-        LocalDateTime now = LocalDateTime.now();
+        String lockKey = "citygo:lock:coupon:claim:" + couponId + ":" + currentUserId;
+        String token = UUID.randomUUID().toString();
+        boolean locked = redisLockUtil.tryLock(lockKey, 5, token);
+        if (!locked) {
+            throw new BizException(ErrorCode.REPEAT_SUBMIT);
+        }
+        try {
+            LocalDateTime now = LocalDateTime.now();
 
-        // a. 查券模板
-        Coupon coupon = couponMapper.selectById(couponId);
-        if (coupon == null) {
-            throw new BizException(ErrorCode.COUPON_NOT_FOUND);
-        }
-        // b. 有效期
-        if (now.isBefore(coupon.getValidStart())) {
-            throw new BizException(ErrorCode.COUPON_NOT_STARTED);
-        }
-        if (now.isAfter(coupon.getValidEnd())) {
-            throw new BizException(ErrorCode.COUPON_EXPIRED);
-        }
-        // c. 状态
-        if (coupon.getStatus() != 1) {
-            throw new BizException(ErrorCode.COUPON_INVALID);
-        }
-        // d. 业务防重复：per_user_limit=1 存在即拒；>1 统计未使用数量
-        int limit = coupon.getPerUserLimit();
-        if (limit == 1) {
-            Long exist = userCouponMapper.selectCount(Wrappers.<UserCoupon>lambdaQuery()
+            // a. 查券模板
+            Coupon coupon = couponMapper.selectById(couponId);
+            if (coupon == null) {
+                throw new BizException(ErrorCode.COUPON_NOT_FOUND);
+            }
+            // b. 有效期
+            if (now.isBefore(coupon.getValidStart())) {
+                throw new BizException(ErrorCode.COUPON_NOT_STARTED);
+            }
+            if (now.isAfter(coupon.getValidEnd())) {
+                throw new BizException(ErrorCode.COUPON_EXPIRED);
+            }
+            // c. 状态
+            if (coupon.getStatus() != 1) {
+                throw new BizException(ErrorCode.COUPON_INVALID);
+            }
+            // d. 业务防重复与限领控制（兼容 per_user_limit >= 1 场景）
+            int limit = coupon.getPerUserLimit() == null ? 1 : coupon.getPerUserLimit();
+            Long claimedCount = userCouponMapper.selectCount(Wrappers.<UserCoupon>lambdaQuery()
                     .eq(UserCoupon::getUserId, currentUserId)
                     .eq(UserCoupon::getCouponId, couponId));
-            if (exist != null && exist > 0) {
+            if (claimedCount != null && claimedCount >= limit) {
                 throw new BizException(ErrorCode.COUPON_ALREADY_CLAIMED);
             }
-        } else {
-            Long unused = userCouponMapper.selectCount(Wrappers.<UserCoupon>lambdaQuery()
-                    .eq(UserCoupon::getUserId, currentUserId)
-                    .eq(UserCoupon::getCouponId, couponId)
-                    .eq(UserCoupon::getStatus, 1));
-            if (unused != null && unused >= limit) {
-                throw new BizException(ErrorCode.COUPON_ALREADY_CLAIMED);
+            // e. 超发控制（并发核心）：条件更新，received_count < total_count 才 +1
+            int rows = couponMapper.update(null, Wrappers.<Coupon>lambdaUpdate()
+                    .eq(Coupon::getId, couponId)
+                    .apply("received_count < total_count")
+                    .setSql("received_count = received_count + 1"));
+            if (rows == 0) {
+                throw new BizException(ErrorCode.COUPON_EXHAUSTED);
             }
-        }
-        // e. 超发控制（并发核心）：条件更新，received_count < total_count 才 +1。
-        //    为什么不能"先查再改"：并发下两个请求同时读到同一剩余量都判定可发，
-        //    最终超发。UPDATE ... WHERE received_count < total_count 是数据库原子
-        //    语句，行锁保证同时只有一次 +1 成功，返回 0 行即领完。
-        int rows = couponMapper.update(null, Wrappers.<Coupon>lambdaUpdate()
-                .eq(Coupon::getId, couponId)
-                .apply("received_count < total_count")
-                .setSql("received_count = received_count + 1"));
-        if (rows == 0) {
-            throw new BizException(ErrorCode.COUPON_EXHAUSTED);
-        }
-        // f. 插入用户券
-        UserCoupon userCoupon = new UserCoupon();
-        userCoupon.setUserId(currentUserId);
-        userCoupon.setCouponId(couponId);
-        userCoupon.setStatus(1);
-        userCoupon.setReceivedTime(now);
-        userCoupon.setExpireTime(coupon.getValidEnd());
-        try {
+            // f. 插入用户券
+            UserCoupon userCoupon = new UserCoupon();
+            userCoupon.setUserId(currentUserId);
+            userCoupon.setCouponId(couponId);
+            userCoupon.setStatus(1);
+            userCoupon.setReceivedTime(now);
+            userCoupon.setExpireTime(coupon.getValidEnd());
             userCouponMapper.insert(userCoupon);
-        } catch (DuplicateKeyException ex) {
-            // g. 并发兜底：业务查重防不了"同时点击"，唯一索引是最后一道闸。
-            //    这里抛业务异常使事务回滚，e 步的 received_count+1 一并回滚。
-            throw new BizException(ErrorCode.COUPON_ALREADY_CLAIMED);
+
+            // g. 返回
+            return toUserCouponVO(userCoupon, coupon);
+        } finally {
+            redisLockUtil.unlock(lockKey, token);
         }
-        // h. 返回
-        return toUserCouponVO(userCoupon, coupon);
     }
 
     @Override

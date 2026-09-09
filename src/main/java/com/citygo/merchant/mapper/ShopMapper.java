@@ -6,6 +6,8 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Update;
 
+import java.math.BigDecimal;
+
 /**
  * 店铺 Mapper，对应 {@code shop} 表。
  *
@@ -23,5 +25,15 @@ public interface ShopMapper extends BaseMapper<Shop> {
      */
     @Update("UPDATE shop SET monthly_sales = monthly_sales + #{delta} WHERE id = #{id}")
     int addMonthlySales(@Param("id") Long id, @Param("delta") int delta);
+
+    /**
+     * 更新店铺评分并原子累加评价数。
+     *
+     * @param id    店铺ID
+     * @param score 新均分
+     * @return 受影响行数
+     */
+    @Update("UPDATE shop SET score = #{score}, review_count = review_count + 1 WHERE id = #{id}")
+    int updateScoreAndIncrReviewCount(@Param("id") Long id, @Param("score") BigDecimal score);
 
 }

@@ -2,6 +2,7 @@ package com.citygo.order.controller;
 
 import com.citygo.common.page.PageVO;
 import com.citygo.common.result.Result;
+import com.citygo.order.dto.MerchantOrderPageQuery;
 import com.citygo.order.service.OrderService;
 import com.citygo.order.vo.OrderVO;
 import io.swagger.v3.oas.annotations.Operation;
@@ -13,7 +14,6 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -36,12 +36,8 @@ public class MerchantOrderController {
      */
     @Operation(summary = "商家订单列表")
     @GetMapping("/merchant")
-    public Result<PageVO<OrderVO>> merchantOrders(
-            @RequestParam(required = false) Long shopId,
-            @RequestParam(required = false) Integer status,
-            @RequestParam(defaultValue = "1") long pageNum,
-            @RequestParam(defaultValue = "10") long pageSize) {
-        return Result.success(orderService.pageMerchant(shopId, status, pageNum, pageSize, currentUserId()));
+    public Result<PageVO<OrderVO>> merchantOrders(MerchantOrderPageQuery query) {
+        return Result.success(orderService.pageMerchant(query, currentUserId()));
     }
 
     /**

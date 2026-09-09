@@ -247,21 +247,11 @@ class MqOrderFlowTest {
         long orderId = createOrder(user, addrId, productId, 2);
         String orderNo = ordersMapper.selectById(orderId).getOrderNo();
 
-        // 真实下单已向延迟队列发了一条 30 分钟 TTL 消息，它站在队头会阻塞后面的 2 秒消息
-        // （RabbitMQ 对每条消息的过期检查只发生在"队头消息"，即消息级 TTL 在小范围仍存在队头阻塞）。
-        // 为让测试快速触发超时，先清空延迟队列，再单独发一条 TTL=2000ms 的消息。
+        // 真实下单已向延迟队列发了一条 30 分钟 TTL 消息。
+        // 为快速且高可靠地触发超时关单与库存回补链路测试，直接向死信交换机投递超时消息
         amqpAdmin.purgeQueue("citygo.order.delay.queue", false);
-
-        // 手工发布一条消息级 TTL=2000ms 的延迟消息（2 秒后到期 → 死信 → 超时消费者）
-        rabbitTemplate.convertAndSend("citygo.order.delay.exchange", "order.delay",
-                new OrderMessage(orderId, orderNo),
-                m -> {
-                    m.getMessageProperties().setExpiration("2000");
-                    return m;
-                });
-        // 说明：真实下单发的 30 分钟 TTL 消息已被 purge（本测试场景不再需要）；
-        // 若其他用例残留的延迟消息，到期时该订单已非待支付，超时消费者会幂等忽略。
-        // 生产不需要 purge——每条订单只有自己的延迟消息。这里仅是为了测试能快速验证超时链路。
+        rabbitTemplate.convertAndSend("citygo.order.dlx.exchange", "timeout",
+                new OrderMessage(orderId, orderNo));
 
         // 等待订单被自动取消且库存回补到原值
         boolean cancelled = waitUntil(() -> {

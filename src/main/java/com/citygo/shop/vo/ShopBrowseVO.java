@@ -48,6 +48,9 @@ public class ShopBrowseVO {
     /** 评分（0-5） */
     private BigDecimal score;
 
+    /** 评价总数 */
+    private Integer reviewCount;
+
     /** 月销量 */
     private Integer monthlySales;
 

@@ -22,9 +22,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
+import java.util.List;
 
 /**
  * 认证域服务实现。
@@ -79,11 +81,18 @@ public class AuthServiceImpl implements AuthService {
         user.setPassword(passwordEncoder.encode(request.getPassword()));
         user.setNickname(request.getUsername());
         user.setStatus(1);
-        userMapper.insert(user);
+        try {
+            userMapper.insert(user);
+        } catch (DuplicateKeyException e) {
+            // 并发注册兜底：前置查重与写入之间存在时间窗，两个并发请求可能同时通过查重，
+            // 后到者触发唯一索引 uk_username 冲突，归一化为与查重一致的业务错误码 409
+            throw new BizException(ErrorCode.USERNAME_ALREADY_EXISTS);
+        }
 
         // 绑定 USER 角色
         Role role = roleMapper.selectOne(
-                Wrappers.<Role>lambdaQuery().eq(Role::getCode, "USER"));
+                Wrappers.<Role>lambdaQuery().eq(Role::getCode, Role.CODE_USER));
+
         if (role == null) {
             throw new BizException(ErrorCode.INTERNAL_ERROR);
         }
@@ -98,19 +107,27 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public LoginResponse login(LoginRequest request) {
         User user = userService.getByUsername(request.getUsername());
-        // 用户不存在或已禁用，统一返回"用户名或密码错误"（防撞库探测）
-        if (user == null || user.getStatus() == 0) {
+        // 用户不存在或非"正常"状态（status=1），统一返回"用户名或密码错误"（防撞库探测）。
+        // 用 equals 判等而非拆箱 ==，防御 status 为 null 时发生 NPE（数据库虽 NOT NULL，实体层不作假设）
+        if (user == null || !Integer.valueOf(1).equals(user.getStatus())) {
             throw new BizException(ErrorCode.BAD_CREDENTIALS);
         }
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
             throw new BizException(ErrorCode.BAD_CREDENTIALS);
         }
 
-        // 签发 token 并写入 Redis 登录态，TTL 与 JWT 有效期一致
+        // 签发 token 并写入 Redis 登录态（包含 userId 与角色列表，消除后续请求的频繁查库）
+        List<Long> roleIds = userRoleMapper.selectList(
+                        Wrappers.<UserRole>lambdaQuery().eq(UserRole::getUserId, user.getId()))
+                .stream().map(UserRole::getRoleId).toList();
+        List<String> roleCodes = roleIds.isEmpty() ? List.of() :
+                roleMapper.selectByIds(roleIds).stream().map(Role::getCode).toList();
+        String redisValue = user.getId() + ":" + String.join(",", roleCodes);
+
         String token = jwtUtil.generateToken(user.getId(), user.getUsername());
         stringRedisTemplate.opsForValue().set(
                 JwtAuthenticationFilter.LOGIN_TOKEN_PREFIX + token,
-                String.valueOf(user.getId()),
+                redisValue,
                 Duration.ofSeconds(expireSeconds));
 
         return new LoginResponse(token, userService.toUserVO(user));

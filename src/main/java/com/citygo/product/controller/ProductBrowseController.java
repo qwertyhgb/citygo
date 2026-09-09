@@ -38,10 +38,7 @@ public class ProductBrowseController {
     @Operation(summary = "商品列表")
     @GetMapping
     public Result<PageVO<ProductVO>> list(@Valid @ModelAttribute ProductBrowseQuery query) {
-        return Result.success(productService.pagePublic(
-                query.getShopId(), query.getCategoryId(), query.getKeyword(),
-                query.getMinPrice(), query.getMaxPrice(),
-                query.getSort(), query.getPageNum(), query.getPageSize()));
+        return Result.success(productService.pagePublic(query));
     }
 
     /**
@@ -53,6 +50,16 @@ public class ProductBrowseController {
     @RateLimit(limit = 5, windowSeconds = 1)
     public Result<List<ProductVO>> hot(@RequestParam(defaultValue = "10") int limit) {
         return Result.success(productService.getHotProducts(limit));
+    }
+
+    /**
+     * 秒杀商品列表（已配置秒杀价且上架的商品，按开始时间升序）。
+     * 与 GET /{id} 不冲突：Spring 路由匹配时字面量路径优先于路径变量。
+     */
+    @Operation(summary = "秒杀商品列表")
+    @GetMapping("/seckill")
+    public Result<List<ProductVO>> seckillList() {
+        return Result.success(productService.getSeckillProducts());
     }
 
     /**

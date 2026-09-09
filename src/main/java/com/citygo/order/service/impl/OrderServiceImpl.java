@@ -14,12 +14,14 @@ import com.citygo.coupon.entity.Coupon;
 import com.citygo.coupon.entity.UserCoupon;
 import com.citygo.coupon.mapper.CouponMapper;
 import com.citygo.coupon.mapper.UserCouponMapper;
+import com.citygo.coupon.vo.UserCouponVO;
 import com.citygo.merchant.entity.Merchant;
 import com.citygo.merchant.entity.Shop;
 import com.citygo.merchant.mapper.ShopMapper;
 import com.citygo.merchant.service.MerchantService;
 import com.citygo.mq.message.OrderMessage;
 import com.citygo.mq.message.PaymentMessage;
+import com.citygo.order.dto.MerchantOrderPageQuery;
 import com.citygo.order.dto.OrderCreateRequest;
 import com.citygo.order.dto.OrderItemRequest;
 import com.citygo.order.entity.OrderItem;
@@ -49,8 +51,11 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -238,7 +243,7 @@ public class OrderServiceImpl implements OrderService {
                 productMapper.selectByIds(productIds)));
 
         // j. 返回订单视图
-        return toVO(order, true);
+        return toVOList(List.of(order), true).get(0);
     }
 
     /**
@@ -307,7 +312,15 @@ public class OrderServiceImpl implements OrderService {
         if (totalAmount.compareTo(coupon.getThresholdAmount()) < 0) {
             throw new BizException(ErrorCode.COUPON_THRESHOLD_NOT_MET);
         }
-        // 计算优惠：满减取 min(满减金额, total)；折扣 = total × (100-折扣率)/100
+        // 优惠计算收口到纯函数，供下单计价与可用券预估共用（规则只写一份）
+        return calcCouponDiscount(coupon, totalAmount);
+    }
+
+    /**
+     * 纯优惠计算（不含任何校验）：满减取 min(满减金额, total)；折扣 = total × (100-折扣率)/100；
+     * 兜底优惠不超过订单总额（保证支付金额不为负）。
+     */
+    private BigDecimal calcCouponDiscount(Coupon coupon, BigDecimal totalAmount) {
         BigDecimal discount;
         if (coupon.getType() == 1) {
             discount = coupon.getDiscountAmount().min(totalAmount);
@@ -317,7 +330,6 @@ public class OrderServiceImpl implements OrderService {
                     .multiply(BigDecimal.valueOf(100L - rate))
                     .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
         }
-        // 兜底：优惠不能超过订单总额（保证支付金额不为负）
         return discount.min(totalAmount);
     }
 
@@ -344,6 +356,95 @@ public class OrderServiceImpl implements OrderService {
         }
     }
 
+    // ---------------- 结算可用券 ----------------
+
+    /**
+     * 结算页可用券匹配（只读，不写库）：与 {@link #computeCouponDiscount} 同一套规则，
+     * 但从"逐张抛异常"改为"逐张过滤"——不满足条件的券不进入候选，
+     * 前端只展示可选的券，避免用户选了不合规券到提交时才报错。
+     *
+     * <p>订单总额在服务端按 DB 实价计算（计价规则唯一来源，前端不复刻乘加逻辑）；
+     * 每张券预计算优惠金额 {@link UserCouponVO#setEstimatedDiscount} 供展示，
+     * 最终优惠仍以下单时 {@link #computeCouponDiscount} 的校验结果为准。</p>
+     */
+    @Override
+    public List<UserCouponVO> listUsableCoupons(List<OrderItemRequest> items, Long currentUserId) {
+        List<Long> productIds = items.stream()
+                .map(OrderItemRequest::getProductId)
+                .filter(Objects::nonNull)
+                .toList();
+        if (productIds.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, Product> productMap = productMapper.selectByIds(productIds).stream()
+                .collect(Collectors.toMap(Product::getId, Function.identity()));
+
+        // 与 create 相同的计价口径：仅统计上架商品（下架商品不可下单，不参与计价）
+        BigDecimal totalAmount = BigDecimal.ZERO;
+        Long shopId = null;
+        for (OrderItemRequest item : items) {
+            Product product = productMap.get(item.getProductId());
+            if (product == null || product.getStatus() == 0) {
+                continue;
+            }
+            totalAmount = totalAmount.add(product.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
+            // 券按店铺匹配 scope；跨店铺购物车在下单时会被拒绝，这里取首个上架商品的店铺
+            if (shopId == null) {
+                shopId = product.getShopId();
+            }
+        }
+        if (shopId == null || totalAmount.compareTo(BigDecimal.ZERO) <= 0) {
+            return List.of();
+        }
+
+        // 候选：本人未使用（status=1）且未过期的用户券
+        List<UserCoupon> userCoupons = userCouponMapper.selectList(
+                Wrappers.<UserCoupon>lambdaQuery()
+                        .eq(UserCoupon::getUserId, currentUserId)
+                        .eq(UserCoupon::getStatus, 1)
+                        .and(w -> w.isNull(UserCoupon::getExpireTime)
+                                .or().gt(UserCoupon::getExpireTime, LocalDateTime.now())));
+        if (userCoupons.isEmpty()) {
+            return List.of();
+        }
+
+        // 批量取券模板，避免循环内单查（与 toVOList 的批量思路一致）
+        List<Long> couponIds = userCoupons.stream().map(UserCoupon::getCouponId).distinct().toList();
+        Map<Long, Coupon> couponMap = couponMapper.selectByIds(couponIds).stream()
+                .collect(Collectors.toMap(Coupon::getId, Function.identity()));
+
+        List<UserCouponVO> result = new ArrayList<>();
+        for (UserCoupon userCoupon : userCoupons) {
+            Coupon coupon = couponMap.get(userCoupon.getCouponId());
+            if (coupon == null) {
+                continue;
+            }
+            // 商家券必须限定在对应店铺使用（与 computeCouponDiscount 的 scope 校验一致）
+            if (coupon.getScope() == 2 && !coupon.getShopId().equals(shopId)) {
+                continue;
+            }
+            // 门槛：订单金额必须达到满减门槛
+            if (totalAmount.compareTo(coupon.getThresholdAmount()) < 0) {
+                continue;
+            }
+            UserCouponVO vo = new UserCouponVO();
+            vo.setId(userCoupon.getId());
+            vo.setCouponId(coupon.getId());
+            vo.setCouponName(coupon.getCouponName());
+            vo.setType(coupon.getType());
+            vo.setThresholdAmount(coupon.getThresholdAmount());
+            vo.setDiscountAmount(coupon.getDiscountAmount());
+            vo.setDiscountRate(coupon.getDiscountRate());
+            vo.setExpireTime(userCoupon.getExpireTime());
+            vo.setStatus(userCoupon.getStatus());
+            vo.setEstimatedDiscount(calcCouponDiscount(coupon, totalAmount));
+            result.add(vo);
+        }
+        // 优惠金额大的排前面，方便用户直接看到最优选择
+        result.sort(Comparator.comparing(UserCouponVO::getEstimatedDiscount).reversed());
+        return result;
+    }
+
     // ---------------- 详情 ----------------
 
     @Override
@@ -359,7 +460,7 @@ public class OrderServiceImpl implements OrderService {
             // 用 404 而非 403，避免暴露订单是否存在的问题（防订单号探测）
             throw new BizException(ErrorCode.ORDER_NOT_FOUND);
         }
-        return toVO(order, true);
+        return toVOList(List.of(order), true).get(0);
     }
 
     // ---------------- 我的订单 ----------------
@@ -378,7 +479,7 @@ public class OrderServiceImpl implements OrderService {
         pageVO.setTotal(page.getTotal());
         pageVO.setPageNum(page.getCurrent());
         pageVO.setPageSize(page.getSize());
-        pageVO.setRecords(page.getRecords().stream().map(o -> toVO(o, false)).toList());
+        pageVO.setRecords(toVOList(page.getRecords(), false));
         return pageVO;
     }
 
@@ -480,7 +581,7 @@ public class OrderServiceImpl implements OrderService {
                     .set(UserCoupon::getUsedTime, null));
             // 0 行说明已被并发处理/已退回，忽略即可
             if (rows == 0) {
-                return;
+                continue;
             }
         }
     }
@@ -534,12 +635,16 @@ public class OrderServiceImpl implements OrderService {
     // ---------------- 商家订单列表 ----------------
 
     @Override
-    public PageVO<OrderVO> pageMerchant(Long shopId, Integer status, long pageNum, long pageSize, Long currentUserId) {
+    public PageVO<OrderVO> pageMerchant(MerchantOrderPageQuery query, Long currentUserId) {
         // 解析当前商家
         Merchant merchant = merchantService.getByUserId(currentUserId);
         if (merchant == null) {
             throw new BizException(ErrorCode.MERCHANT_NOT_FOUND);
         }
+        Long shopId = query.getShopId();
+        Integer status = query.getStatus();
+        long pageNum = query.getPageNum();
+        long pageSize = query.getPageSize();
         LambdaQueryWrapper<Orders> qw = Wrappers.lambdaQuery();
         if (shopId != null) {
             // 指定店铺必须归属当前商家
@@ -569,7 +674,7 @@ public class OrderServiceImpl implements OrderService {
         pageVO.setTotal(page.getTotal());
         pageVO.setPageNum(page.getCurrent());
         pageVO.setPageSize(page.getSize());
-        pageVO.setRecords(page.getRecords().stream().map(o -> toVO(o, false)).toList());
+        pageVO.setRecords(toVOList(page.getRecords(), false));
         return pageVO;
     }
 
@@ -652,53 +757,76 @@ public class OrderServiceImpl implements OrderService {
     }
 
     /**
-     * 订单 → 视图对象；includeItems=true 时附带明细。
+     * 批量将订单转换为视图对象，避免 N+1 查询问题。
      */
-    private OrderVO toVO(Orders order, boolean includeItems) {
-        OrderVO vo = new OrderVO();
-        vo.setId(order.getId());
-        vo.setOrderNo(order.getOrderNo());
-        vo.setShopId(order.getShopId());
-        // 补店铺名（用于列表/详情展示）
-        Shop shop = shopMapper.selectById(order.getShopId());
-        vo.setShopName(shop == null ? null : shop.getShopName());
-        vo.setStatus(order.getStatus());
-        OrderStatus status = OrderStatus.fromCode(order.getStatus());
-        vo.setStatusDesc(status == null ? "未知状态" : status.getDesc());
-        vo.setSource(order.getSource() != null ? order.getSource() : OrderSource.NORMAL.getCode());
-        vo.setTotalAmount(order.getTotalAmount());
-        vo.setDiscountAmount(order.getDiscountAmount());
-        // 补显示用的券名：通过订单关联的 user_coupon（order_id 反查）拿券模板名
-        vo.setCouponName(resolveCouponName(order.getId()));
-        vo.setPayAmount(order.getPayAmount());
-        vo.setReceiverName(order.getReceiverName());
-        vo.setReceiverPhone(order.getReceiverPhone());
-        vo.setReceiverAddress(order.getReceiverAddress());
-        vo.setRemark(order.getRemark());
-        vo.setCreateTime(order.getCreateTime());
-        vo.setPaidTime(order.getPaidTime());
-        vo.setCompletedTime(order.getCompletedTime());
-        vo.setCancelTime(order.getCancelTime());
-        vo.setCancelReason(order.getCancelReason());
-        if (includeItems) {
-            vo.setItems(orderItemMapper.selectList(
-                            Wrappers.<OrderItem>lambdaQuery().eq(OrderItem::getOrderId, order.getId()))
-                    .stream().map(this::toItemVO).toList());
+    private List<OrderVO> toVOList(List<Orders> orders, boolean includeItems) {
+        if (orders == null || orders.isEmpty()) {
+            return List.of();
         }
-        return vo;
-    }
 
-    /**
-     * 通过订单ID反查其关联的优惠券名称；未用券或查不到返回 null。
-     */
-    private String resolveCouponName(Long orderId) {
-        UserCoupon uc = userCouponMapper.selectOne(
-                Wrappers.<UserCoupon>lambdaQuery().eq(UserCoupon::getOrderId, orderId).last("limit 1"));
-        if (uc == null) {
-            return null;
+        // 1. 批量查询店铺信息
+        List<Long> shopIds = orders.stream().map(Orders::getShopId).distinct().toList();
+        Map<Long, Shop> shopMap = shopIds.isEmpty() ? Map.of() :
+                shopMapper.selectByIds(shopIds).stream().collect(Collectors.toMap(Shop::getId, Function.identity()));
+
+        // 2. 批量查询关联的优惠券
+        List<Long> orderIds = orders.stream().map(Orders::getId).toList();
+        List<UserCoupon> userCoupons = userCouponMapper.selectList(
+                Wrappers.<UserCoupon>lambdaQuery().in(UserCoupon::getOrderId, orderIds));
+        Map<Long, Long> orderToCouponIdMap = userCoupons.stream()
+                .collect(Collectors.toMap(UserCoupon::getOrderId, UserCoupon::getCouponId, (c1, c2) -> c1));
+
+        List<Long> couponIds = orderToCouponIdMap.values().stream().distinct().toList();
+        Map<Long, String> couponIdToNameMap = couponIds.isEmpty() ? Map.of() :
+                couponMapper.selectByIds(couponIds).stream().collect(Collectors.toMap(Coupon::getId, Coupon::getCouponName));
+
+        // 3. 批量查询订单明细
+        Map<Long, List<OrderItem>> orderItemMap;
+        if (includeItems) {
+            List<OrderItem> items = orderItemMapper.selectList(
+                    Wrappers.<OrderItem>lambdaQuery().in(OrderItem::getOrderId, orderIds));
+            orderItemMap = items.stream().collect(Collectors.groupingBy(OrderItem::getOrderId));
+        } else {
+            orderItemMap = Map.of();
         }
-        Coupon coupon = couponMapper.selectById(uc.getCouponId());
-        return coupon == null ? null : coupon.getCouponName();
+
+        // 4. 组装结果
+        return orders.stream().map(order -> {
+            OrderVO vo = new OrderVO();
+            vo.setId(order.getId());
+            vo.setOrderNo(order.getOrderNo());
+            vo.setShopId(order.getShopId());
+            
+            Shop shop = shopMap.get(order.getShopId());
+            vo.setShopName(shop == null ? null : shop.getShopName());
+            
+            vo.setStatus(order.getStatus());
+            OrderStatus status = OrderStatus.fromCode(order.getStatus());
+            vo.setStatusDesc(status == null ? "未知状态" : status.getDesc());
+            vo.setSource(order.getSource() != null ? order.getSource() : OrderSource.NORMAL.getCode());
+            vo.setTotalAmount(order.getTotalAmount());
+            vo.setDiscountAmount(order.getDiscountAmount());
+            
+            Long couponId = orderToCouponIdMap.get(order.getId());
+            vo.setCouponName(couponId == null ? null : couponIdToNameMap.get(couponId));
+            
+            vo.setPayAmount(order.getPayAmount());
+            vo.setReceiverName(order.getReceiverName());
+            vo.setReceiverPhone(order.getReceiverPhone());
+            vo.setReceiverAddress(order.getReceiverAddress());
+            vo.setRemark(order.getRemark());
+            vo.setCreateTime(order.getCreateTime());
+            vo.setPaidTime(order.getPaidTime());
+            vo.setCompletedTime(order.getCompletedTime());
+            vo.setCancelTime(order.getCancelTime());
+            vo.setCancelReason(order.getCancelReason());
+            
+            if (includeItems) {
+                List<OrderItem> items = orderItemMap.getOrDefault(order.getId(), List.of());
+                vo.setItems(items.stream().map(this::toItemVO).toList());
+            }
+            return vo;
+        }).toList();
     }
 
     /**

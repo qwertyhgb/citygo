@@ -44,6 +44,34 @@ public class SeckillServiceImpl implements SeckillService {
     /** Redis 秒杀用户去重 key 前缀：citygo:seckill:user:{productId}:{userId} */
     public static final String KEY_SECKILL_USER_PREFIX = "citygo:seckill:user:";
 
+    /** Redis 秒杀商品配置缓存 key 前缀：citygo:seckill:info:{productId} */
+    public static final String KEY_SECKILL_INFO_PREFIX = "citygo:seckill:info:";
+
+    /**
+     * 秒杀原子 Lua 脚本：一人一单查重 + 库存扣减 + 用户占位。
+     *
+     * <p>返回值说明：
+     * <ul>
+     *   <li>1: 抢购成功（库存扣减且用户占位成功）；</li>
+     *   <li>-1: 重复抢购（用户已抢购过该商品）；</li>
+     *   <li>-2: 秒杀售罄（库存不足）。</li>
+     * </ul>
+     * </p>
+     */
+    private static final org.springframework.data.redis.core.script.DefaultRedisScript<Long> SECKILL_LUA_SCRIPT =
+            new org.springframework.data.redis.core.script.DefaultRedisScript<>(
+                    "if redis.call('exists', KEYS[2]) == 1 then\n" +
+                    "    return -1\n" +
+                    "end\n" +
+                    "local stock = tonumber(redis.call('get', KEYS[1]) or '-1')\n" +
+                    "if stock <= 0 then\n" +
+                    "    return -2\n" +
+                    "end\n" +
+                    "redis.call('decr', KEYS[1])\n" +
+                    "redis.call('set', KEYS[2], '1', 'EX', ARGV[1])\n" +
+                    "return 1",
+                    Long.class);
+
     private final ProductMapper productMapper;
     private final ProductService productService;
     private final MerchantService merchantService;
@@ -102,10 +130,11 @@ public class SeckillServiceImpl implements SeckillService {
         product.setSeckillEnd(request.getEndTime());
         productMapper.updateById(product);
 
-        // 5. 初始化/覆盖 Redis 预扣库存：
-        //    说明：配置变更后以最新配置为准，直接 set 覆盖，使秒杀库存即时生效
+        // 5. 初始化/覆盖 Redis 预扣库存与秒杀配置缓存（热点数据预热，秒杀请求零查库）
         String stockKey = KEY_SECKILL_STOCK_PREFIX + productId;
         stringRedisTemplate.opsForValue().set(stockKey, String.valueOf(request.getSeckillStock()));
+
+        cacheSeckillInfo(product);
 
         // 6. 失效商品详情/热门缓存，并在事务提交后同步 ES 商品文档
         productService.evictProductDetail(productId);
@@ -115,6 +144,20 @@ public class SeckillServiceImpl implements SeckillService {
 
         // 7. 返回最新商品视图
         return toVO(product);
+    }
+
+    private void cacheSeckillInfo(Product product) {
+        if (product == null || product.getSeckillStart() == null || product.getSeckillEnd() == null) {
+            return;
+        }
+        String infoKey = KEY_SECKILL_INFO_PREFIX + product.getId();
+        String infoValue = product.getStatus() + "|" + product.getSeckillStart() + "|"
+                + product.getSeckillEnd() + "|" + product.getSeckillPrice();
+        Duration ttl = Duration.between(LocalDateTime.now(), product.getSeckillEnd()).plusHours(1);
+        if (ttl.isNegative() || ttl.isZero()) {
+            ttl = Duration.ofHours(24);
+        }
+        stringRedisTemplate.opsForValue().set(infoKey, infoValue, ttl);
     }
 
     private ProductVO toVO(Product product) {
@@ -141,60 +184,71 @@ public class SeckillServiceImpl implements SeckillService {
 
     @Override
     public void seckill(Long productId, Long userId) {
-        // a. 查商品：商品必须存在且完整配置了秒杀信息，否则返回 SELL_NOT_AVAILABLE
-        //    为什么：防止对普通未开启秒杀的商品进行秒杀请求；未配置秒杀的商品不能抢购
-        Product product = productMapper.selectById(productId);
-        if (product == null) {
-            throw new BizException(ErrorCode.PRODUCT_NOT_FOUND);
+        // a. 获取秒杀商品时段与状态配置（优先读 Redis 缓存，防止瞬时峰值穿透打垮 MySQL）
+        String infoKey = KEY_SECKILL_INFO_PREFIX + productId;
+        String infoValue = stringRedisTemplate.opsForValue().get(infoKey);
+
+        int status;
+        LocalDateTime startTime;
+        LocalDateTime endTime;
+
+        if (infoValue != null) {
+            String[] parts = infoValue.split("\\|");
+            status = Integer.parseInt(parts[0]);
+            startTime = LocalDateTime.parse(parts[1]);
+            endTime = LocalDateTime.parse(parts[2]);
+        } else {
+            // 缓存未命中（降级回源 MySQL 并回填缓存）
+            Product product = productMapper.selectById(productId);
+            if (product == null) {
+                throw new BizException(ErrorCode.PRODUCT_NOT_FOUND);
+            }
+            if (product.getStatus() == null || product.getStatus() != 1
+                    || product.getSeckillPrice() == null
+                    || product.getSeckillStock() == null
+                    || product.getSeckillStart() == null
+                    || product.getSeckillEnd() == null) {
+                throw new BizException(ErrorCode.SELL_NOT_AVAILABLE);
+            }
+            status = product.getStatus();
+            startTime = product.getSeckillStart();
+            endTime = product.getSeckillEnd();
+            cacheSeckillInfo(product);
         }
-        if (product.getStatus() == null || product.getStatus() != 1
-                || product.getSeckillPrice() == null
-                || product.getSeckillStock() == null
-                || product.getSeckillStart() == null
-                || product.getSeckillEnd() == null) {
+
+        if (status != 1) {
             throw new BizException(ErrorCode.SELL_NOT_AVAILABLE);
         }
 
-        // b. 时段校验：
-        //    为什么：不在活动时间窗口内的请求必须被立刻拦截，避免非活动时间扣减库存
+        // b. 时段校验
         LocalDateTime now = LocalDateTime.now();
-        if (now.isBefore(product.getSeckillStart())) {
+        if (now.isBefore(startTime)) {
             throw new BizException(ErrorCode.SELL_NOT_STARTED);
         }
-        if (now.isAfter(product.getSeckillEnd())) {
+        if (now.isAfter(endTime)) {
             throw new BizException(ErrorCode.SELL_ENDED);
         }
 
-        // c. 一人一单（Redis SETNX 原子去重）：
-        //    为什么：Redis 原子去重扛住高并发，比查数据库快且不压 DB；TTL 设置为到秒杀活动结束的剩余时间
+        // c. Redis Lua 脚本原子执行【一人一单查重 + 库存扣减 + 用户占位】（零并发间隙与多次网络往返）
         String userKey = KEY_SECKILL_USER_PREFIX + productId + ":" + userId;
-        Duration ttl = Duration.between(now, product.getSeckillEnd());
-        if (ttl.isNegative() || ttl.isZero()) {
-            ttl = Duration.ofSeconds(1);
-        }
-        Boolean absent = stringRedisTemplate.opsForValue().setIfAbsent(userKey, "1", ttl);
-        if (absent == null || !absent) {
+        String stockKey = KEY_SECKILL_STOCK_PREFIX + productId;
+        Duration ttl = Duration.between(now, endTime);
+        long ttlSeconds = ttl.isNegative() || ttl.isZero() ? 1L : ttl.getSeconds();
+
+        Long result = stringRedisTemplate.execute(
+                SECKILL_LUA_SCRIPT,
+                List.of(stockKey, userKey),
+                String.valueOf(ttlSeconds));
+
+        if (result == null || result == -2L) {
+            throw new BizException(ErrorCode.SELL_OUT);
+        } else if (result == -1L) {
             throw new BizException(ErrorCode.SELL_REPEAT);
         }
 
-        // d. 预扣库存（Redis DECR 原子操作）：
-        //    为什么：DECR 原子操作解决高并发库存竞争，瞬间在内存完成超卖控制；
-        //    预扣成功后即使后面落库失败，也由订单超时/消费者异常补偿机制回退
-        String stockKey = KEY_SECKILL_STOCK_PREFIX + productId;
-        Long remain = stringRedisTemplate.opsForValue().decrement(stockKey);
-        if (remain == null || remain < 0) {
-            // 库存不足，DECR 扣成了负数，必须原子 INCR 回滚，并释放当前用户的抢购锁标记
-            stringRedisTemplate.opsForValue().increment(stockKey);
-            stringRedisTemplate.delete(userKey);
-            throw new BizException(ErrorCode.SELL_OUT);
-        }
-
-        // e. 发送 MQ 异步下单消息：
-        //    说明：直接发送到 Direct 交换机；若发送失败补偿策略见消费者注释（本学习项目不做本地消息表）
+        // d. 发送 MQ 异步下单消息
         rabbitTemplate.convertAndSend("citygo.seckill.order.exchange", "seckill.order",
                 new SeckillMessage(userId, productId));
-
-        // f. 抢购成功（控制器返回 Result.success("抢购成功，订单创建中")）
     }
 
 }

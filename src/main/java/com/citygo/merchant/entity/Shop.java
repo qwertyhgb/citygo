@@ -56,6 +56,9 @@ public class Shop {
     /** 评分（0-5） */
     private BigDecimal score;
 
+    /** 评价总数（冗余字段，发表评价时递增） */
+    private Integer reviewCount;
+
     /** 月销量（冗余字段） */
     private Integer monthlySales;
 

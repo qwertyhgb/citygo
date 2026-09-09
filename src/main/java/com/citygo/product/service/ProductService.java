@@ -1,6 +1,8 @@
 package com.citygo.product.service;
 
 import com.citygo.common.page.PageVO;
+import com.citygo.product.dto.ProductBrowseQuery;
+import com.citygo.product.dto.ProductMyPageQuery;
 import com.citygo.product.dto.ProductCreateRequest;
 import com.citygo.product.dto.ProductStatusRequest;
 import com.citygo.product.dto.ProductStockRequest;
@@ -37,15 +39,13 @@ public interface ProductService {
     /**
      * 当前商家的商品分页列表（可选店铺/模糊商品名过滤，按 id 倒序）。
      */
-    PageVO<ProductVO> pageMy(Long shopId, String keyword, long pageNum, long pageSize, Long currentUserId);
+    PageVO<ProductVO> pageMy(ProductMyPageQuery query, Long currentUserId);
 
     /**
      * 公开商品分页查询（仅上架商品，支持店铺/分类/关键词/价格区间过滤与白名单排序；
-     * 返回结果 stock 置 null 脱敏）。shopId 非空时校验店铺 status=1，否则抛 SHOP_NOT_FOUND。
+     * 返回结果 stock 置 null 脱敏）。query.shopId 非空时校验店铺 status=1，否则抛 SHOP_NOT_FOUND。
      */
-    PageVO<ProductVO> pagePublic(Long shopId, Long categoryId, String keyword,
-                                 java.math.BigDecimal minPrice, java.math.BigDecimal maxPrice,
-                                 String sort, long pageNum, long pageSize);
+    PageVO<ProductVO> pagePublic(ProductBrowseQuery query);
 
     /**
      * 公开商品详情（仅上架商品；不存在或下架抛 PRODUCT_NOT_FOUND；stock 置 null 脱敏）。
@@ -56,6 +56,11 @@ public interface ProductService {
      * 热门商品（销量 top N 的上架商品，手写缓存三防；stock 置 null 脱敏）。
      */
     List<ProductVO> getHotProducts(int limit);
+
+    /**
+     * 秒杀商品列表（已配置秒杀价且上架的商品，按秒杀开始时间升序；stock 置 null 脱敏）。
+     */
+    List<ProductVO> getSeckillProducts();
 
     /**
      * 失效指定商品的详情缓存（下单扣库存等旁路写操作后触发，保证缓存一致性）。

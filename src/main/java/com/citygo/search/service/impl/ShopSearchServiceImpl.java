@@ -147,6 +147,7 @@ public class ShopSearchServiceImpl implements ShopSearchService {
         doc.setDistrict(shop.getDistrict());
         doc.setAddress(shop.getAddress());
         doc.setScore(shop.getScore() == null ? null : shop.getScore().doubleValue());
+        doc.setReviewCount(shop.getReviewCount());
         doc.setMonthlySales(shop.getMonthlySales());
         doc.setOpenStatus(shop.getOpenStatus());
         doc.setStatus(shop.getStatus());
@@ -165,6 +166,7 @@ public class ShopSearchServiceImpl implements ShopSearchService {
         vo.setDistrict(doc.getDistrict());
         vo.setAddress(doc.getAddress());
         vo.setScore(doc.getScore() == null ? null : BigDecimal.valueOf(doc.getScore()));
+        vo.setReviewCount(doc.getReviewCount());
         vo.setMonthlySales(doc.getMonthlySales());
         vo.setOpenStatus(doc.getOpenStatus());
         vo.setStatus(doc.getStatus());

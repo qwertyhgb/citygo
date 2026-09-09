@@ -109,13 +109,10 @@ public class ReviewServiceImpl implements ReviewService {
             // 并发下两条同时插入同一订单，唯一索引兜底保证只有一条成功
             throw new BizException(ErrorCode.REVIEW_ALREADY_EXISTS);
         }
-        // e. 店铺评分重算：AVG(可见评价) → 回写 shop.score
+        // e. 店铺评分重算与评价数原子累加：AVG(可见评价) → 回写 shop.score，同时 review_count + 1
         BigDecimal avg = reviewMapper.avgRatingByShop(order.getShopId());
-        if (avg != null) {
-            shopMapper.update(null, Wrappers.<Shop>lambdaUpdate()
-                    .eq(Shop::getId, order.getShopId())
-                    .set(Shop::getScore, avg));
-        }
+        BigDecimal newScore = avg != null ? avg : BigDecimal.valueOf(request.getRating());
+        shopMapper.updateScoreAndIncrReviewCount(order.getShopId(), newScore);
         // f. 评分变了 → 失效店铺详情缓存（shopDetail 含 score，缓存必须联动）
         shopBrowseService.evictDetailCache(order.getShopId());
         // f1. 评分变了 → 近实时同步店铺到 ES（评分排序需要最新）

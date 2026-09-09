@@ -40,4 +40,10 @@ public class UserCouponVO {
     /** 状态：1 未使用 2 已使用 3 已过期 */
     private Integer status;
 
+    /**
+     * 预估优惠金额：仅"结算可用券"接口按指定订单总额计算后返回，
+     * 前端只做展示不复刻计价规则，最终优惠以下单结果为准。
+     */
+    private BigDecimal estimatedDiscount;
+
 }

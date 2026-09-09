@@ -44,6 +44,10 @@ public class ShopDoc {
     @Field(type = FieldType.Double)
     private Double score;
 
+    /** 评价总数（新增评价后递增） */
+    @Field(type = FieldType.Integer)
+    private Integer reviewCount;
+
     /** 月销量（下单累加后同步） */
     @Field(type = FieldType.Integer)
     private Integer monthlySales;

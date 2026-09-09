@@ -27,6 +27,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -183,14 +185,27 @@ public class SeckillOrderConsumer {
         productMapper.addSales(productId, 1);
         shopMapper.addMonthlySales(product.getShopId(), 1);
 
-        // 发送超时 TTL 延迟消息（复用普通订单下单超时机制：TTL 30 分钟）
+        // 发送超时 TTL 延迟消息（复用普通订单下单超时机制：TTL 30 分钟，在事务提交后发送）
         OrderMessage delayMsg = new OrderMessage(order.getId(), order.getOrderNo());
         long ttlMillis = timeoutMinutes * 60 * 1000;
-        rabbitTemplate.convertAndSend("citygo.order.delay.exchange", "order.delay", delayMsg,
-                m -> {
-                    m.getMessageProperties().setExpiration(String.valueOf(ttlMillis));
-                    return m;
-                });
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    rabbitTemplate.convertAndSend("citygo.order.delay.exchange", "order.delay", delayMsg,
+                            m -> {
+                                m.getMessageProperties().setExpiration(String.valueOf(ttlMillis));
+                                return m;
+                            });
+                }
+            });
+        } else {
+            rabbitTemplate.convertAndSend("citygo.order.delay.exchange", "order.delay", delayMsg,
+                    m -> {
+                        m.getMessageProperties().setExpiration(String.valueOf(ttlMillis));
+                        return m;
+                    });
+        }
 
         // 缓存失效与 ES 近实时同步
         productService.evictProductDetail(productId);

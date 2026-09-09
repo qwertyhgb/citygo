@@ -122,6 +122,7 @@ public class ShopBrowseServiceImpl implements ShopBrowseService {
         vo.setLongitude(shop.getLongitude());
         vo.setLatitude(shop.getLatitude());
         vo.setScore(shop.getScore());
+        vo.setReviewCount(shop.getReviewCount());
         vo.setMonthlySales(shop.getMonthlySales());
         vo.setOpenStatus(shop.getOpenStatus());
         vo.setOpenTime(shop.getOpenTime());

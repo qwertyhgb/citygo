@@ -1,8 +1,13 @@
 package com.citygo.order.service;
 
 import com.citygo.common.page.PageVO;
+import com.citygo.coupon.vo.UserCouponVO;
+import com.citygo.order.dto.MerchantOrderPageQuery;
 import com.citygo.order.dto.OrderCreateRequest;
+import com.citygo.order.dto.OrderItemRequest;
 import com.citygo.order.vo.OrderVO;
+
+import java.util.List;
 
 /**
  * 订单域服务接口。
@@ -42,7 +47,7 @@ public interface OrderService {
     /**
      * 商家订单分页（可选店铺【必校验归属】/状态筛选）。
      */
-    PageVO<OrderVO> pageMerchant(Long shopId, Integer status, long pageNum, long pageSize, Long currentUserId);
+    PageVO<OrderVO> pageMerchant(MerchantOrderPageQuery query, Long currentUserId);
 
     /**
      * 商家接单（20 → 30）。
@@ -58,5 +63,11 @@ public interface OrderService {
      * 商家完成（40 → 50，写 completed_time）。
      */
     void complete(Long id, Long currentUserId);
+
+    /**
+     * 结算可用券匹配：按商品明细在服务端计算订单总额（计价规则唯一来源），
+     * 过滤出有效期/适用范围/门槛都满足的本人未使用券，并预计算各券优惠金额。
+     */
+    List<UserCouponVO> listUsableCoupons(List<OrderItemRequest> items, Long currentUserId);
 
 }
