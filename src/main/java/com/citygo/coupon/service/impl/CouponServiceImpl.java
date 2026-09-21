@@ -18,7 +18,9 @@ import com.citygo.merchant.entity.Merchant;
 import com.citygo.merchant.service.MerchantService;
 import com.citygo.merchant.service.ShopService;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -48,17 +50,20 @@ public class CouponServiceImpl implements CouponService {
     private final MerchantService merchantService;
     private final ShopService shopService;
     private final RedisLockUtil redisLockUtil;
+    private final TransactionTemplate transactionTemplate;
 
     public CouponServiceImpl(CouponMapper couponMapper,
                              UserCouponMapper userCouponMapper,
                              MerchantService merchantService,
                              ShopService shopService,
-                             RedisLockUtil redisLockUtil) {
+                             RedisLockUtil redisLockUtil,
+                             PlatformTransactionManager transactionManager) {
         this.couponMapper = couponMapper;
         this.userCouponMapper = userCouponMapper;
         this.merchantService = merchantService;
         this.shopService = shopService;
         this.redisLockUtil = redisLockUtil;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
     @Override
@@ -135,7 +140,6 @@ public class CouponServiceImpl implements CouponService {
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public UserCouponVO claim(Long couponId, Long currentUserId) {
         String lockKey = "citygo:lock:coupon:claim:" + couponId + ":" + currentUserId;
         String token = UUID.randomUUID().toString();
@@ -144,51 +148,53 @@ public class CouponServiceImpl implements CouponService {
             throw new BizException(ErrorCode.REPEAT_SUBMIT);
         }
         try {
-            LocalDateTime now = LocalDateTime.now();
+            return transactionTemplate.execute(txStatus -> {
+                LocalDateTime now = LocalDateTime.now();
 
-            // a. 查券模板
-            Coupon coupon = couponMapper.selectById(couponId);
-            if (coupon == null) {
-                throw new BizException(ErrorCode.COUPON_NOT_FOUND);
-            }
-            // b. 有效期
-            if (now.isBefore(coupon.getValidStart())) {
-                throw new BizException(ErrorCode.COUPON_NOT_STARTED);
-            }
-            if (now.isAfter(coupon.getValidEnd())) {
-                throw new BizException(ErrorCode.COUPON_EXPIRED);
-            }
-            // c. 状态
-            if (coupon.getStatus() != 1) {
-                throw new BizException(ErrorCode.COUPON_INVALID);
-            }
-            // d. 业务防重复与限领控制（兼容 per_user_limit >= 1 场景）
-            int limit = coupon.getPerUserLimit() == null ? 1 : coupon.getPerUserLimit();
-            Long claimedCount = userCouponMapper.selectCount(Wrappers.<UserCoupon>lambdaQuery()
-                    .eq(UserCoupon::getUserId, currentUserId)
-                    .eq(UserCoupon::getCouponId, couponId));
-            if (claimedCount != null && claimedCount >= limit) {
-                throw new BizException(ErrorCode.COUPON_ALREADY_CLAIMED);
-            }
-            // e. 超发控制（并发核心）：条件更新，received_count < total_count 才 +1
-            int rows = couponMapper.update(null, Wrappers.<Coupon>lambdaUpdate()
-                    .eq(Coupon::getId, couponId)
-                    .apply("received_count < total_count")
-                    .setSql("received_count = received_count + 1"));
-            if (rows == 0) {
-                throw new BizException(ErrorCode.COUPON_EXHAUSTED);
-            }
-            // f. 插入用户券
-            UserCoupon userCoupon = new UserCoupon();
-            userCoupon.setUserId(currentUserId);
-            userCoupon.setCouponId(couponId);
-            userCoupon.setStatus(1);
-            userCoupon.setReceivedTime(now);
-            userCoupon.setExpireTime(coupon.getValidEnd());
-            userCouponMapper.insert(userCoupon);
+                // a. 查券模板
+                Coupon coupon = couponMapper.selectById(couponId);
+                if (coupon == null) {
+                    throw new BizException(ErrorCode.COUPON_NOT_FOUND);
+                }
+                // b. 有效期
+                if (now.isBefore(coupon.getValidStart())) {
+                    throw new BizException(ErrorCode.COUPON_NOT_STARTED);
+                }
+                if (now.isAfter(coupon.getValidEnd())) {
+                    throw new BizException(ErrorCode.COUPON_EXPIRED);
+                }
+                // c. 状态
+                if (coupon.getStatus() != 1) {
+                    throw new BizException(ErrorCode.COUPON_INVALID);
+                }
+                // d. 业务防重复与限领控制（兼容 per_user_limit >= 1 场景）
+                int limit = coupon.getPerUserLimit() == null ? 1 : coupon.getPerUserLimit();
+                Long claimedCount = userCouponMapper.selectCount(Wrappers.<UserCoupon>lambdaQuery()
+                        .eq(UserCoupon::getUserId, currentUserId)
+                        .eq(UserCoupon::getCouponId, couponId));
+                if (claimedCount != null && claimedCount >= limit) {
+                    throw new BizException(ErrorCode.COUPON_ALREADY_CLAIMED);
+                }
+                // e. 超发控制（并发核心）：条件更新，received_count < total_count 才 +1
+                int rows = couponMapper.update(null, Wrappers.<Coupon>lambdaUpdate()
+                        .eq(Coupon::getId, couponId)
+                        .apply("received_count < total_count")
+                        .setSql("received_count = received_count + 1"));
+                if (rows == 0) {
+                    throw new BizException(ErrorCode.COUPON_EXHAUSTED);
+                }
+                // f. 插入用户券
+                UserCoupon userCoupon = new UserCoupon();
+                userCoupon.setUserId(currentUserId);
+                userCoupon.setCouponId(couponId);
+                userCoupon.setStatus(1);
+                userCoupon.setReceivedTime(now);
+                userCoupon.setExpireTime(coupon.getValidEnd());
+                userCouponMapper.insert(userCoupon);
 
-            // g. 返回
-            return toUserCouponVO(userCoupon, coupon);
+                // g. 返回
+                return toUserCouponVO(userCoupon, coupon);
+            });
         } finally {
             redisLockUtil.unlock(lockKey, token);
         }

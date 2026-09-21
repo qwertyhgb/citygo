@@ -47,7 +47,22 @@ public class RedisLockUtil {
     }
 
     /**
-     * 加锁（自动生成持有者标识）：{@code SET key uuid EX expireSeconds NX}。
+     * 加锁并返回自动生成的持有者标识（Token）：{@code SET key uuid EX expireSeconds NX}。
+     * 成功返回持锁 token，调用方在 finally 中传给 {@link #unlock(String, String)} 安全解锁。
+     *
+     * @param key           锁的 key
+     * @param expireSeconds 锁过期秒数（防止持锁方宕机导致死锁）
+     * @return 获取成功返回持有者 token，已被他人持有返回 null
+     */
+    public String tryLockWithToken(String key, long expireSeconds) {
+        String token = UUID.randomUUID().toString();
+        boolean ok = tryLock(key, expireSeconds, token);
+        return ok ? token : null;
+    }
+
+    /**
+     * 加锁（自动生成持有者标识，仅用于无需主动解锁、完全依赖 TTL 自然过期的互斥场景）。
+     * 若需要显式在 finally 中安全解锁，请使用 {@link #tryLockWithToken(String, long)} 或 {@link #tryLock(String, long, String)}。
      *
      * @param key           锁的 key
      * @param expireSeconds 锁过期秒数（防止持锁方宕机导致死锁）

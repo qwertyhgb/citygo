@@ -1,6 +1,7 @@
 package com.citygo.mq.consumer;
 
 import com.citygo.common.exception.BizException;
+import com.citygo.mq.config.RabbitConfig;
 import com.citygo.mq.message.OrderMessage;
 import com.citygo.order.entity.Orders;
 import com.citygo.order.enums.OrderStatus;
@@ -34,7 +35,7 @@ public class OrderTimeoutConsumer {
         this.orderService = orderService;
     }
 
-    @RabbitListener(queues = "citygo.order.timeout.queue")
+    @RabbitListener(queues = RabbitConfig.QUEUE_ORDER_TIMEOUT)
     public void onTimeout(OrderMessage message) {
         Long orderId = message.getOrderId();
         // 幂等前置：订单不存在或已非待支付，直接忽略（可能已支付/已取消）

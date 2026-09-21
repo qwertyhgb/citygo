@@ -20,6 +20,9 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * 和 Elasticsearch（搜索引擎，用于商品/店铺搜索）。为了让两者保持一致，业务在写库之后，
  * 也要把数据同步给 ES。本类就是这个"同步调度器"的核心，负责让同步动作在正确的时间点（事务提交后）
  * 安全地执行。</p>
+ *
+ * <p><b>复用说明</b>：本类的调度语义是通用的"事务提交后执行动作"，因此除 ES 同步外，
+ * 也被其他需要 afterCommit 时机的能力复用（如秒杀订单消费者写秒杀结果 key）。</p>
  */
 @Component
 public class SearchSync {
@@ -76,22 +79,24 @@ public class SearchSync {
     }
 
     /**
-     * 安全地执行同步任务：任何异常都不会向上抛出，只记一条 ERROR 日志。
+     * 安全地执行事务提交后的异步任务：任何异常都不会向上抛出，只记一条 ERROR 日志。
      *
      * <p><b>为什么异常不能往上抛？</b><br>
-     * 假设 ES 暂时不可用，导致同步失败。此时 MySQL 已经提交成功了，主库数据没问题。
+     * 本方法的执行时机在事务提交之后——MySQL 已经提交成功，主库数据没问题。
      * 如果这里把异常抛出去，会打扰到原本成功的业务请求，甚至让调用方误以为操作失败。
-     * 项目采用"主库为准"的取舍：ES 同步失败，只打日志记录下来，业务照常成功。
+     * 典型任务如 ES 索引同步（失败则允许索引短暂不一致，主库为准）、秒杀结果 key 写入等，
+     * 均属"失败可观测但不阻断主流程"的旁路动作。
      * （生产环境可以再配合 MQ 重试或定时任务补偿，学习项目用日志兜底即可。）</p>
      *
-     * @param task 要执行的同步任务
+     * @param task 要执行的任务
      */
     private void runSafely(Runnable task) {
         try {
             task.run();
         } catch (Exception e) {
-            // 主库为准，ES 同步失败打 ERROR 不阻断主流程
-            log.error("ES 索引同步失败（主库为准，忽略）: ", e);
+            // 通用文案：这里执行的可能不只是 ES 同步，还有秒杀结果 key 写入等 afterCommit 任务，
+            // 日志不能误导排查方向（写明"任务执行失败"而非特指某个中间件）
+            log.error("事务提交后异步任务执行失败（不阻断主流程）: ", e);
         }
     }
 

@@ -43,3 +43,11 @@ management:
     health:
       # 始终展示健康检查的子组件详情（含 db 数据源状态），便于确认基础设施连通性
       show-components: always
+
+# 业务自定义配置
+citygo:
+  rate-limit:
+    # 限流接口解析客户端 IP 时，请求经过的可信反向代理层数（如 1 层 nginx 填 1）。
+    # 0（默认）= 不信任任何代理头，直接取 TCP 层 remoteAddr（最安全，无法被伪造头绕过）；
+    # 部署在反向代理之后时按实际层数填写，切面从 X-Forwarded-For 从右往左取第 N 个。
+    trusted-proxy-count: 0

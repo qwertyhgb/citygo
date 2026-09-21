@@ -94,6 +94,9 @@ public class ReviewServiceImpl implements ReviewService {
         if (exist != null && exist > 0) {
             throw new BizException(ErrorCode.REVIEW_ALREADY_EXISTS);
         }
+        // c1. 并发安全：行锁锁定当前店铺，序列化同一店铺的并发评价，防止均分计算相互覆盖
+        shopMapper.selectIdForUpdate(order.getShopId());
+
         // d. 插入评价：shopId 冗余自订单
         Review review = new Review();
         review.setOrderId(order.getId());

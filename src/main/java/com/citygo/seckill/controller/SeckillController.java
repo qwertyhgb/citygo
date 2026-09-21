@@ -7,6 +7,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -41,6 +42,19 @@ public class SeckillController {
         Long currentUserId = currentUserId();
         seckillService.seckill(productId, currentUserId);
         return Result.success("抢购成功，订单创建中");
+    }
+
+    /**
+     * 查询秒杀抢购结果（前端轮询）。
+     *
+     * @param productId 秒杀商品ID
+     * @return 订单ID（已创建）；null（仍在排队处理中）
+     */
+    @Operation(summary = "查询秒杀结果")
+    @GetMapping("/{productId}/result")
+    public Result<Long> getResult(@PathVariable Long productId) {
+        Long currentUserId = currentUserId();
+        return Result.success(seckillService.getSeckillResult(productId, currentUserId));
     }
 
     private Long currentUserId() {

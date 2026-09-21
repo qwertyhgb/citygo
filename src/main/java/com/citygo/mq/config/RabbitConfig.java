@@ -26,11 +26,54 @@ import tools.jackson.databind.json.JsonMapper;
  * 下单 → 发送 TTL 消息到延迟交换机 → 延迟队列（到期无人消费）→ 消息进死信交换机 →
  * 死信交换机按 routing-key=timeout → 超时队列 → OrderTimeoutConsumer → 状态机校验（10→60）→ 取消并回补库存。</p>
  *
- * <p><b>TTL+DLX 优缺点（面试点）</b>：优点——纯原生、无需插件；缺点——队列级 TTL 有"队头阻塞"
- * （队首短消息不先过期时，后面即使过期也得等），本项目用<b>消息级 TTL</b>，每条消息独立计时，规避队头阻塞。</p>
+ * <p><b>TTL+DLX 优缺点（面试点，按官方文档修正）</b>：优点——纯原生、无需插件；
+ * 缺点——Classic Queue 下<b>无论队列级 TTL 还是消息级 TTL，过期消息都要到达队头才会被真正 dead-letter</b>
+ * （官方文档原文："Classic queues dead letter expired messages ... when the message reaches the head of the queue"；
+ * 消息级 TTL 的过期消息同样会排在未过期消息后面、占用队列资源，直到轮到自己到队头才被清除）。
+ * 本项目仍选择<b>消息级 TTL</b>，真正原因是：①测试可用小 TTL 逐条覆盖默认 30 分钟；②未来可支持不同订单差异化超时。
+ * 队头阻塞的实际影响可忽略：延迟队列中消息 TTL 基本一致（默认 30 分钟），过期顺序≈入队顺序。</p>
  */
 @Configuration
 public class RabbitConfig {
+
+    // ==================== 拓扑名常量 ====================
+    // 所有交换机/队列/routing key 名称收敛为常量，生产者（rabbitTemplate.convertAndSend）
+    // 与消费者（@RabbitListener）统一引用，避免字符串散落各处导致改名不同步。
+    // 注解参数要求编译期常量，故使用 public static final String。
+
+    /** 交换机：下单异步（Direct） */
+    public static final String EXCHANGE_ORDER_CREATED = "citygo.order.created.exchange";
+    /** 队列：下单成功（库存预警消费者监听） */
+    public static final String QUEUE_ORDER_CREATED = "citygo.order.created.queue";
+    /** 路由键：下单异步 */
+    public static final String RK_ORDER_CREATED = "order.created";
+
+    /** 交换机：支付成功广播（Fanout） */
+    public static final String EXCHANGE_PAYMENT_SUCCESS = "citygo.payment.success.exchange";
+    /** 队列：支付通知-用户 */
+    public static final String QUEUE_PAYMENT_NOTIFY_USER = "citygo.payment.notify.user.queue";
+    /** 队列：支付通知-商家 */
+    public static final String QUEUE_PAYMENT_NOTIFY_MERCHANT = "citygo.payment.notify.merchant.queue";
+
+    /** 交换机：订单延迟（Direct，TTL 消息入口） */
+    public static final String EXCHANGE_ORDER_DELAY = "citygo.order.delay.exchange";
+    /** 队列：订单延迟（TTL，到期转投死信） */
+    public static final String QUEUE_ORDER_DELAY = "citygo.order.delay.queue";
+    /** 路由键：订单延迟 */
+    public static final String RK_ORDER_DELAY = "order.delay";
+    /** 死信交换机：订单超时 */
+    public static final String EXCHANGE_ORDER_DLX = "citygo.order.dlx.exchange";
+    /** 死信路由键：订单超时 */
+    public static final String RK_ORDER_TIMEOUT = "timeout";
+    /** 队列：订单超时（死信消费者监听） */
+    public static final String QUEUE_ORDER_TIMEOUT = "citygo.order.timeout.queue";
+
+    /** 交换机：秒杀异步下单（Direct） */
+    public static final String EXCHANGE_SECKILL_ORDER = "citygo.seckill.order.exchange";
+    /** 队列：秒杀异步下单 */
+    public static final String QUEUE_SECKILL_ORDER = "citygo.seckill.order.queue";
+    /** 路由键：秒杀异步下单 */
+    public static final String RK_SECKILL_ORDER = "seckill.order";
 
     // ==================== 消息转换器 ====================
 
@@ -55,19 +98,19 @@ public class RabbitConfig {
     /** 下单成功交换机（Direct）。routing key = order.created，投递给库存预警队列。 */
     @Bean
     public DirectExchange orderCreatedExchange() {
-        return new DirectExchange("citygo.order.created.exchange", true, false);
+        return new DirectExchange(EXCHANGE_ORDER_CREATED, true, false);
     }
 
     /** 下单成功队列：库存预警消费者监听。 */
     @Bean
     public Queue orderCreatedQueue() {
-        return new Queue("citygo.order.created.queue", true);
+        return new Queue(QUEUE_ORDER_CREATED, true);
     }
 
     /** 绑定：交换机 → 队列，routing key = order.created。 */
     @Bean
     public Binding orderCreatedBinding() {
-        return BindingBuilder.bind(orderCreatedQueue()).to(orderCreatedExchange()).with("order.created");
+        return BindingBuilder.bind(orderCreatedQueue()).to(orderCreatedExchange()).with(RK_ORDER_CREATED);
     }
 
     // ==================== 二、支付成功广播（Fanout：payment.success） ====================
@@ -80,19 +123,19 @@ public class RabbitConfig {
      */
     @Bean
     public FanoutExchange paymentSuccessExchange() {
-        return new FanoutExchange("citygo.payment.success.exchange", true, false);
+        return new FanoutExchange(EXCHANGE_PAYMENT_SUCCESS, true, false);
     }
 
     /** 支付通知-用户队列：通知用户消费者监听。 */
     @Bean
     public Queue paymentNotifyUserQueue() {
-        return new Queue("citygo.payment.notify.user.queue", true);
+        return new Queue(QUEUE_PAYMENT_NOTIFY_USER, true);
     }
 
     /** 支付通知-商家队列：通知商家消费者监听。 */
     @Bean
     public Queue paymentNotifyMerchantQueue() {
-        return new Queue("citygo.payment.notify.merchant.queue", true);
+        return new Queue(QUEUE_PAYMENT_NOTIFY_MERCHANT, true);
     }
 
     /** 用户队列绑定（Fanout：无 routing key）。 */
@@ -112,7 +155,7 @@ public class RabbitConfig {
     /** 延迟交换机（Direct）。下单后按 routing key = order.delay 发消息到这里，进入延迟队列。 */
     @Bean
     public DirectExchange orderDelayExchange() {
-        return new DirectExchange("citygo.order.delay.exchange", true, false);
+        return new DirectExchange(EXCHANGE_ORDER_DELAY, true, false);
     }
 
     /**
@@ -120,7 +163,9 @@ public class RabbitConfig {
      *
      * <p>队列属性：
      * <ul>
-     *   <li>不设队列级 x-message-ttl（用消息级 TTL，便于测试用小值、避免队头阻塞）；</li>
+     *   <li>不设队列级 x-message-ttl，改用【消息级 TTL】：测试可用小值逐条覆盖默认 30 分钟、未来可支持差异化超时。
+     *       注意：消息级 TTL <b>不能</b>规避队头阻塞——Classic Queue 下过期消息只有到达队头才会被真正 dead-letter，
+     *       本项目订单 TTL 基本一致（默认 30 分钟），过期顺序≈入队顺序，实际影响可忽略；</li>
      *   <li>x-dead-letter-exchange = citygo.order.dlx.exchange（消息过期转投此处）；</li>
      *   <li>x-dead-letter-routing-key = timeout（死信交换机据此路由到超时队列）。</li>
      * </ul>
@@ -128,34 +173,34 @@ public class RabbitConfig {
      */
     @Bean
     public Queue orderDelayQueue() {
-        return QueueBuilder.durable("citygo.order.delay.queue")
-                .deadLetterExchange("citygo.order.dlx.exchange")
-                .deadLetterRoutingKey("timeout")
+        return QueueBuilder.durable(QUEUE_ORDER_DELAY)
+                .deadLetterExchange(EXCHANGE_ORDER_DLX)
+                .deadLetterRoutingKey(RK_ORDER_TIMEOUT)
                 .build();
     }
 
     /** 绑定：延迟交换机 → 延迟队列，routing key = order.delay。 */
     @Bean
     public Binding orderDelayBinding() {
-        return BindingBuilder.bind(orderDelayQueue()).to(orderDelayExchange()).with("order.delay");
+        return BindingBuilder.bind(orderDelayQueue()).to(orderDelayExchange()).with(RK_ORDER_DELAY);
     }
 
     /** 死信交换机（Direct）。接收延迟队列到期转投的消息。 */
     @Bean
     public DirectExchange orderDlxExchange() {
-        return new DirectExchange("citygo.order.dlx.exchange", true, false);
+        return new DirectExchange(EXCHANGE_ORDER_DLX, true, false);
     }
 
     /** 超时队列：系统取消订单消费者监听。 */
     @Bean
     public Queue orderTimeoutQueue() {
-        return new Queue("citygo.order.timeout.queue", true);
+        return new Queue(QUEUE_ORDER_TIMEOUT, true);
     }
 
     /** 绑定：死信交换机 → 超时队列，routing key = timeout。 */
     @Bean
     public Binding orderTimeoutBinding() {
-        return BindingBuilder.bind(orderTimeoutQueue()).to(orderDlxExchange()).with("timeout");
+        return BindingBuilder.bind(orderTimeoutQueue()).to(orderDlxExchange()).with(RK_ORDER_TIMEOUT);
     }
 
     // ==================== 四、秒杀异步下单（Direct：seckill.order） ====================
@@ -163,19 +208,19 @@ public class RabbitConfig {
     /** 秒杀订单交换机（Direct）。routing key = seckill.order，投递给秒杀异步下单队列。 */
     @Bean
     public DirectExchange seckillOrderExchange() {
-        return new DirectExchange("citygo.seckill.order.exchange", true, false);
+        return new DirectExchange(EXCHANGE_SECKILL_ORDER, true, false);
     }
 
     /** 秒杀异步下单队列：秒杀消费者监听。 */
     @Bean
     public Queue seckillOrderQueue() {
-        return new Queue("citygo.seckill.order.queue", true);
+        return new Queue(QUEUE_SECKILL_ORDER, true);
     }
 
     /** 绑定：秒杀交换机 → 秒杀队列，routing key = seckill.order。 */
     @Bean
     public Binding seckillOrderBinding() {
-        return BindingBuilder.bind(seckillOrderQueue()).to(seckillOrderExchange()).with("seckill.order");
+        return BindingBuilder.bind(seckillOrderQueue()).to(seckillOrderExchange()).with(RK_SECKILL_ORDER);
     }
 
 }

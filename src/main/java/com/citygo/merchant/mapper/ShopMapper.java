@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.citygo.merchant.entity.Shop;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.math.BigDecimal;
@@ -35,5 +36,14 @@ public interface ShopMapper extends BaseMapper<Shop> {
      */
     @Update("UPDATE shop SET score = #{score}, review_count = review_count + 1 WHERE id = #{id}")
     int updateScoreAndIncrReviewCount(@Param("id") Long id, @Param("score") BigDecimal score);
+
+    /**
+     * 排他锁查询店铺ID（FOR UPDATE），用于在事务内序列化对同一店铺的并发写操作（如评价均分更新）。
+     *
+     * @param id 店铺ID
+     * @return 店铺ID
+     */
+    @Select("SELECT id FROM shop WHERE id = #{id} FOR UPDATE")
+    Long selectIdForUpdate(@Param("id") Long id);
 
 }

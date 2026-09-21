@@ -3,6 +3,7 @@ package com.citygo;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * CityGo 后端入口。
@@ -22,6 +23,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  */
 @SpringBootApplication
 @MapperScan("com.citygo.**.mapper")
+@EnableScheduling
 public class CityGoApplication {
 
     public static void main(String[] args) {

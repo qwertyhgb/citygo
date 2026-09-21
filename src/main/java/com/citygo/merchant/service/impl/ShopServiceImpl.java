@@ -287,6 +287,7 @@ public class ShopServiceImpl implements ShopService {
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
+    @CacheEvict(cacheNames = "shopDetail", key = "#id")
     public void updateOpenStatus(Long id, ShopOpenStatusRequest request, Long currentUserId) {
         // 校验商家身份和店铺归属
         Merchant merchant = requireMerchant(currentUserId);

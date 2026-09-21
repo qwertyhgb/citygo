@@ -26,4 +26,13 @@ public interface SeckillService {
      */
     void seckill(Long productId, Long userId);
 
+    /**
+     * 查询秒杀抢购结果（前端轮询）。
+     *
+     * @param productId 秒杀商品ID
+     * @param userId    抢购用户ID
+     * @return 订单ID（已成功创建）；null（仍在排队处理中）
+     */
+    Long getSeckillResult(Long productId, Long userId);
+
 }

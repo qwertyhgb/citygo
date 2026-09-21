@@ -1,6 +1,7 @@
 package com.citygo.mq.consumer;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.citygo.mq.config.RabbitConfig;
 import com.citygo.mq.message.OrderMessage;
 import com.citygo.mq.message.StockWarnMessage;
 import com.citygo.order.entity.OrderItem;
@@ -53,7 +54,7 @@ public class OrderCreatedConsumer {
         this.jsonMapper = jsonMapper;
     }
 
-    @RabbitListener(queues = "citygo.order.created.queue")
+    @RabbitListener(queues = RabbitConfig.QUEUE_ORDER_CREATED)
     public void onOrderCreated(OrderMessage message) {
         try {
             Long orderId = message.getOrderId();

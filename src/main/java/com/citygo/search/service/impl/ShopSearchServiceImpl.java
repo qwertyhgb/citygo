@@ -80,17 +80,20 @@ public class ShopSearchServiceImpl implements ShopSearchService {
                 query = Query.of(q -> q.bool(b -> b.must(musts).filter(filters)));
             }
 
+            long safePageNum = Math.max(pageNum, 1);
+            long safePageSize = Math.min(Math.max(pageSize, 1), 50);
+
             NativeQuery nativeQuery = NativeQuery.builder()
                     .withQuery(query)
                     .withSort(buildSort(sort, nearLat, nearLng))
-                    .withPageable(PageRequest.of((int) (pageNum - 1), (int) pageSize))
+                    .withPageable(PageRequest.of((int) (safePageNum - 1), (int) safePageSize))
                     .build();
 
             SearchHits<ShopDoc> hits = operations.search(nativeQuery, ShopDoc.class);
             PageVO<ShopBrowseVO> pageVO = new PageVO<>();
             pageVO.setTotal(hits.getTotalHits());
-            pageVO.setPageNum(pageNum);
-            pageVO.setPageSize(pageSize);
+            pageVO.setPageNum(safePageNum);
+            pageVO.setPageSize(safePageSize);
             pageVO.setRecords(hits.getSearchHits().stream()
                     .map(SearchHit::getContent)
                     .map(this::toVO)

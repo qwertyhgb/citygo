@@ -145,7 +145,10 @@ public enum ErrorCode {
     SELL_REPEAT(409, "每人限购一件，请勿重复抢购"),
 
     /** 秒杀库存已售罄 */
-    SELL_OUT(409, "手慢了，商品已抢完");
+    SELL_OUT(409, "手慢了，商品已抢完"),
+
+    /** 秒杀下单系统繁忙：本地消息落库失败（已回滚 Redis 预扣库存与占位），请稍后重试 */
+    SELL_SYSTEM_BUSY(503, "系统繁忙，请稍后重试");
 
     /** 业务错误码 */
     private final int code;

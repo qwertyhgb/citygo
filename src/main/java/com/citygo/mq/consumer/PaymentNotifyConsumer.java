@@ -2,6 +2,7 @@ package com.citygo.mq.consumer;
 
 import com.citygo.merchant.entity.Shop;
 import com.citygo.merchant.mapper.ShopMapper;
+import com.citygo.mq.config.RabbitConfig;
 import com.citygo.mq.message.PaymentMessage;
 import com.citygo.order.entity.Orders;
 import com.citygo.order.mapper.OrdersMapper;
@@ -47,7 +48,7 @@ public class PaymentNotifyConsumer {
     }
 
     /** 通知用户 */
-    @RabbitListener(queues = "citygo.payment.notify.user.queue")
+    @RabbitListener(queues = RabbitConfig.QUEUE_PAYMENT_NOTIFY_USER)
     public void notifyUser(PaymentMessage message) {
         try {
             Orders order = ordersMapper.selectById(message.getOrderId());
@@ -65,7 +66,7 @@ public class PaymentNotifyConsumer {
     }
 
     /** 通知商家 */
-    @RabbitListener(queues = "citygo.payment.notify.merchant.queue")
+    @RabbitListener(queues = RabbitConfig.QUEUE_PAYMENT_NOTIFY_MERCHANT)
     public void notifyMerchant(PaymentMessage message) {
         try {
             Orders order = ordersMapper.selectById(message.getOrderId());

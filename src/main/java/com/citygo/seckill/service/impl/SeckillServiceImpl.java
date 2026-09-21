@@ -5,6 +5,7 @@ import com.citygo.common.exception.ErrorCode;
 import com.citygo.merchant.entity.Merchant;
 import com.citygo.merchant.service.MerchantService;
 import com.citygo.merchant.service.ShopService;
+import com.citygo.mq.config.RabbitConfig;
 import com.citygo.product.entity.Product;
 import com.citygo.product.mapper.ProductMapper;
 import com.citygo.product.service.ProductService;
@@ -12,8 +13,12 @@ import com.citygo.product.vo.ProductVO;
 import com.citygo.search.service.ProductSearchService;
 import com.citygo.search.support.SearchSync;
 import com.citygo.seckill.dto.SeckillConfigRequest;
+import com.citygo.seckill.entity.SeckillMessageRecord;
+import com.citygo.seckill.mapper.SeckillMessageMapper;
 import com.citygo.seckill.message.SeckillMessage;
 import com.citygo.seckill.service.SeckillService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -38,11 +43,16 @@ import java.util.List;
 @Service
 public class SeckillServiceImpl implements SeckillService {
 
+    private static final Logger log = LoggerFactory.getLogger(SeckillServiceImpl.class);
+
     /** Redis 秒杀库存 key 前缀：citygo:seckill:stock:{productId} */
     public static final String KEY_SECKILL_STOCK_PREFIX = "citygo:seckill:stock:";
 
     /** Redis 秒杀用户去重 key 前缀：citygo:seckill:user:{productId}:{userId} */
     public static final String KEY_SECKILL_USER_PREFIX = "citygo:seckill:user:";
+
+    /** Redis 秒杀结果 key 前缀：citygo:seckill:result:{productId}:{userId} -> orderId */
+    public static final String KEY_SECKILL_RESULT_PREFIX = "citygo:seckill:result:";
 
     /** Redis 秒杀商品配置缓存 key 前缀：citygo:seckill:info:{productId} */
     public static final String KEY_SECKILL_INFO_PREFIX = "citygo:seckill:info:";
@@ -78,6 +88,7 @@ public class SeckillServiceImpl implements SeckillService {
     private final ShopService shopService;
     private final StringRedisTemplate stringRedisTemplate;
     private final RabbitTemplate rabbitTemplate;
+    private final SeckillMessageMapper seckillMessageMapper;
     private final ProductSearchService productSearchService;
     private final SearchSync searchSync;
 
@@ -87,6 +98,7 @@ public class SeckillServiceImpl implements SeckillService {
                               ShopService shopService,
                               StringRedisTemplate stringRedisTemplate,
                               RabbitTemplate rabbitTemplate,
+                              SeckillMessageMapper seckillMessageMapper,
                               ProductSearchService productSearchService,
                               SearchSync searchSync) {
         this.productMapper = productMapper;
@@ -95,6 +107,7 @@ public class SeckillServiceImpl implements SeckillService {
         this.shopService = shopService;
         this.stringRedisTemplate = stringRedisTemplate;
         this.rabbitTemplate = rabbitTemplate;
+        this.seckillMessageMapper = seckillMessageMapper;
         this.productSearchService = productSearchService;
         this.searchSync = searchSync;
     }
@@ -139,8 +152,8 @@ public class SeckillServiceImpl implements SeckillService {
         // 6. 失效商品详情/热门缓存，并在事务提交后同步 ES 商品文档
         productService.evictProductDetail(productId);
         productService.evictHotProducts();
-        searchSync.afterCommit(() -> productSearchService.syncProducts(
-                List.of(productMapper.selectById(productId))));
+        // 复用内存中的 product（第 4 步 updateById 后字段即最新值），避免 afterCommit 再查一次库
+        searchSync.afterCommit(() -> productSearchService.syncProducts(List.of(product)));
 
         // 7. 返回最新商品视图
         return toVO(product);
@@ -246,9 +259,57 @@ public class SeckillServiceImpl implements SeckillService {
             throw new BizException(ErrorCode.SELL_REPEAT);
         }
 
-        // d. 发送 MQ 异步下单消息
-        rabbitTemplate.convertAndSend("citygo.seckill.order.exchange", "seckill.order",
-                new SeckillMessage(userId, productId));
+        // d. 本地消息表落库（可靠消息最终一致性：以落库为准，落库即视为抢购成功）
+        SeckillMessageRecord record = new SeckillMessageRecord();
+        record.setUserId(userId);
+        record.setProductId(productId);
+        record.setStatus(SeckillMessageRecord.STATUS_PENDING);
+        record.setRetryCount(0);
+        record.setNextRetryTime(LocalDateTime.now());
+        try {
+            seckillMessageMapper.insert(record);
+        } catch (Exception e) {
+            // 消息落库失败（DB 不可用）：回滚 Redis 预扣库存与用户占位，让用户可重试，
+            // 避免"库存已扣、用户已占位、却没有任何订单凭证"的缝隙（订单凭空消失）
+            log.error("秒杀消息落库失败，回滚 Redis 预扣库存: productId={}, userId={}", productId, userId, e);
+            stringRedisTemplate.opsForValue().increment(stockKey);
+            stringRedisTemplate.delete(userKey);
+            throw new BizException(ErrorCode.SELL_SYSTEM_BUSY);
+        }
+
+        // e. 投递 MQ 异步下单：投递失败不抛错，保持 status=0 由补偿任务 SeckillMessageRelayTask 重发（消息必达）
+        try {
+            rabbitTemplate.convertAndSend(RabbitConfig.EXCHANGE_SECKILL_ORDER, RabbitConfig.RK_SECKILL_ORDER,
+                    new SeckillMessage(userId, productId));
+            SeckillMessageRecord sent = new SeckillMessageRecord();
+            sent.setId(record.getId());
+            sent.setStatus(SeckillMessageRecord.STATUS_SENT);
+            seckillMessageMapper.updateById(sent);
+        } catch (Exception e) {
+            log.warn("秒杀消息投递失败，等待补偿任务重发: msgId={}, userId={}, productId={}, err={}",
+                    record.getId(), userId, productId, e.getMessage());
+        }
+    }
+
+    @Override
+    public Long getSeckillResult(Long productId, Long userId) {
+        // 轮询三态（全走 Redis 内存，零打 MySQL，彻底阻断轮询流量穿透到 DB）：
+        // ① result key 存在：建单成功，直接返回 orderId（即使订单后续超时或主动取消，orderId 仍然有效，前端直接展示已取消，避免排队死循环）
+        String resultKey = KEY_SECKILL_RESULT_PREFIX + productId + ":" + userId;
+        String orderIdStr = stringRedisTemplate.opsForValue().get(resultKey);
+        if (orderIdStr != null) {
+            return Long.valueOf(orderIdStr);
+        }
+
+        // ② result 无但占位 key 存在：已抢中资格，MQ 异步建单正在排队落库中，返回 null 提示前端继续轮询
+        String userKey = KEY_SECKILL_USER_PREFIX + productId + ":" + userId;
+        Boolean hasUserKey = stringRedisTemplate.hasKey(userKey);
+        if (Boolean.TRUE.equals(hasUserKey)) {
+            return null;
+        }
+
+        // ③ 都没有：未抢中资格（售罄/重复抢购拦截）或建单异常已被回滚
+        throw new BizException(ErrorCode.ORDER_NOT_FOUND);
     }
 
 }

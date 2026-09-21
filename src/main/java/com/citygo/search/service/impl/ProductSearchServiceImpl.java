@@ -104,17 +104,20 @@ public class ProductSearchServiceImpl implements ProductSearchService {
                 query = Query.of(q -> q.bool(b -> b.must(musts).filter(filters)));
             }
 
+            long safePageNum = Math.max(pageNum, 1);
+            long safePageSize = Math.min(Math.max(pageSize, 1), 50);
+
             NativeQuery nativeQuery = NativeQuery.builder()
                     .withQuery(query)
                     .withSort(buildSort(sort))
-                    .withPageable(PageRequest.of((int) (pageNum - 1), (int) pageSize))
+                    .withPageable(PageRequest.of((int) (safePageNum - 1), (int) safePageSize))
                     .build();
 
             SearchHits<ProductDoc> hits = operations.search(nativeQuery, ProductDoc.class);
             PageVO<ProductVO> pageVO = new PageVO<>();
             pageVO.setTotal(hits.getTotalHits());
-            pageVO.setPageNum(pageNum);
-            pageVO.setPageSize(pageSize);
+            pageVO.setPageNum(safePageNum);
+            pageVO.setPageSize(safePageSize);
             // stock 置 null 脱敏（公开搜索不暴露商家内部库存）
             pageVO.setRecords(hits.getSearchHits().stream()
                     .map(SearchHit::getContent)

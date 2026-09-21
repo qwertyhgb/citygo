@@ -19,6 +19,7 @@ import com.citygo.merchant.entity.Merchant;
 import com.citygo.merchant.entity.Shop;
 import com.citygo.merchant.mapper.ShopMapper;
 import com.citygo.merchant.service.MerchantService;
+import com.citygo.mq.config.RabbitConfig;
 import com.citygo.mq.message.OrderMessage;
 import com.citygo.mq.message.PaymentMessage;
 import com.citygo.order.dto.MerchantOrderPageQuery;
@@ -190,10 +191,14 @@ public class OrderServiceImpl implements OrderService {
         // e1. 订单已插入（拿到 orderId），核销用户券（幂等条件更新）
         useCoupon(request.getCouponId(), currentUserId, order.getId());
 
-        // f. 批量插入订单明细（商品名/图/单价均为快照）
+        // f. 批量插入订单明细（商品名/图/单价均为快照）：
+        //    一条多值 INSERT 代替循环单条插入，减少 N 次网络往返；
+        //    主键为雪花 ID，须由调用方预先填充（MyBatis-Plus 仅对单条 insert 自动生成 ID）
+        List<OrderItem> orderItems = new ArrayList<>(itemRequests.size());
         for (OrderItemRequest item : itemRequests) {
             Product product = productMap.get(item.getProductId());
             OrderItem orderItem = new OrderItem();
+            orderItem.setId(IdWorker.getId());
             orderItem.setOrderId(order.getId());
             orderItem.setProductId(product.getId());
             orderItem.setProductName(product.getProductName());
@@ -201,13 +206,20 @@ public class OrderServiceImpl implements OrderService {
             orderItem.setPrice(product.getPrice());
             orderItem.setQuantity(item.getQuantity());
             orderItem.setTotalAmount(product.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
-            orderItemMapper.insert(orderItem);
+            orderItems.add(orderItem);
         }
+        orderItemMapper.insertBatch(orderItems);
 
         // g. CAS 扣库存 + 加销量（防超卖核心）
         //    先查再改在并发下会超卖；此处 UPDATE ... WHERE stock >= ? 是数据库原子操作，
         //    行锁保证同一商品同一时刻只有一个下单能扣成功，返回 0 行即库存不足。
-        for (OrderItemRequest item : itemRequests) {
+        //    防死锁：多商品订单先按 productId 升序统一加锁顺序——若两个并发订单以相反
+        //    顺序扣减同一组商品（订单1 持 A 等 B，订单2 持 B 等 A），会交叉持锁形成
+        //    死锁环，被 InnoDB 死锁检测回滚一方；排序后所有事务加锁顺序一致，杜绝该场景。
+        List<OrderItemRequest> sortedItems = itemRequests.stream()
+                .sorted(Comparator.comparing(OrderItemRequest::getProductId))
+                .toList();
+        for (OrderItemRequest item : sortedItems) {
             int rows = productMapper.deductStock(item.getProductId(), item.getQuantity());
             if (rows == 0) {
                 throw new BizException(ErrorCode.INSUFFICIENT_STOCK);
@@ -269,10 +281,10 @@ public class OrderServiceImpl implements OrderService {
     private void sendOrderMessages(Orders order) {
         OrderMessage msg = new OrderMessage(order.getId(), order.getOrderNo());
         // 一、async 通知：库存预警消费者
-        rabbitTemplate.convertAndSend("citygo.order.created.exchange", "order.created", msg);
+        rabbitTemplate.convertAndSend(RabbitConfig.EXCHANGE_ORDER_CREATED, RabbitConfig.RK_ORDER_CREATED, msg);
         // 二、超时延迟消息：消息级 TTL（毫秒），到期无人支付 → 死信 → 超时消费者自动取消
         long ttlMillis = timeoutMinutes * 60 * 1000;
-        rabbitTemplate.convertAndSend("citygo.order.delay.exchange", "order.delay", msg,
+        rabbitTemplate.convertAndSend(RabbitConfig.EXCHANGE_ORDER_DELAY, RabbitConfig.RK_ORDER_DELAY, msg,
                 m -> {
                     m.getMessageProperties().setExpiration(String.valueOf(ttlMillis));
                     return m;
@@ -573,16 +585,13 @@ public class OrderServiceImpl implements OrderService {
                         .eq(UserCoupon::getOrderId, orderId)
                         .eq(UserCoupon::getStatus, 2));
         for (UserCoupon uc : usedCoupons) {
-            int rows = userCouponMapper.update(null, Wrappers.<UserCoupon>lambdaUpdate()
+            // 条件更新（status=2 → 1）：影响行数为 0 说明已被并发处理/已退回，幂等忽略即可
+            userCouponMapper.update(null, Wrappers.<UserCoupon>lambdaUpdate()
                     .eq(UserCoupon::getId, uc.getId())
                     .eq(UserCoupon::getStatus, 2)
                     .set(UserCoupon::getStatus, 1)
                     .set(UserCoupon::getOrderId, null)
                     .set(UserCoupon::getUsedTime, null));
-            // 0 行说明已被并发处理/已退回，忽略即可
-            if (rows == 0) {
-                continue;
-            }
         }
     }
 
@@ -625,7 +634,7 @@ public class OrderServiceImpl implements OrderService {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    rabbitTemplate.convertAndSend("citygo.payment.success.exchange", "",
+                    rabbitTemplate.convertAndSend(RabbitConfig.EXCHANGE_PAYMENT_SUCCESS, "",
                             new PaymentMessage(order.getId(), payment.getPaymentNo(), payment.getAmount()));
                 }
             });

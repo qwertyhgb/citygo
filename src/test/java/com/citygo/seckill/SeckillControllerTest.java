@@ -32,6 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -106,6 +107,9 @@ public class SeckillControllerTest {
         // 1. 物理硬删数据库中的秒杀订单及订单明细
         jdbcTemplate.update("DELETE FROM order_item WHERE order_id IN (SELECT id FROM orders WHERE source = 2)");
         jdbcTemplate.update("DELETE FROM orders WHERE source = 2");
+
+        // 1.5 物理硬删秒杀可靠消息本地消息表残留（补偿任务不参与测试，避免数据累积污染）
+        jdbcTemplate.update("DELETE FROM seckill_message");
 
         // 2. 清理 Redis 中的秒杀库存、一人一单去重、限流及缓存 key
         Set<String> seckillKeys = redis.keys("citygo:seckill:*");
@@ -295,6 +299,13 @@ public class SeckillControllerTest {
         }, 10000);
 
         assertTrue(created, "秒杀异步订单应成功创建并落库");
+
+        // 验证 Redis 轮询接口立即返回生成的 orderId（纯读 Redis，0 次 DB 查询）
+        mockMvc.perform(get("/api/seckill/" + productId + "/result")
+                        .header("Authorization", "Bearer " + user.token()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data").isNumber());
     }
 
     /**
@@ -440,6 +451,47 @@ public class SeckillControllerTest {
         // 验证缓存已被失效
         assertFalse(redis.hasKey("productDetail::" + productId), "商品详情缓存应被失效");
         assertFalse(redis.hasKey("citygo:cache:hotProducts"), "热门商品缓存应被失效");
+
+        // 验证问题 A 修复：订单取消后，轮询结果依然直接返回 orderId（前端跳转订单详情显示已取消，绝不死循环转圈）
+        mockMvc.perform(get("/api/seckill/" + productId + "/result")
+                        .header("Authorization", "Bearer " + user.token()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data").value(orderId));
+    }
+
+    /**
+     * 8. 轮询结果三态验证（纯 Redis 内存，零打 MySQL，彻底阻断轮询流量穿透到 DB）：
+     *    ① result key 存在 → 200 返回 orderId
+     *    ② result 无但 user key 存在 → 200 data: null（排队中）
+     *    ③ 都没有 → 404 ORDER_NOT_FOUND
+     */
+    @Test
+    void seckill_result_polling_three_states() throws Exception {
+        Long productId = 99999L;
+        UserAuth user = register("u_res_" + uniqueSuffix());
+
+        // ③ 状态三：未抢中且未排队 → 404 ORDER_NOT_FOUND
+        mockMvc.perform(get("/api/seckill/" + productId + "/result")
+                        .header("Authorization", "Bearer " + user.token()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(404));
+
+        // ② 状态二：排队中（占位 key 存在，但建单异步落库中 result key 尚未生成） → 200 data 为 null
+        redis.opsForValue().set("citygo:seckill:user:" + productId + ":" + user.userId(), "1");
+        mockMvc.perform(get("/api/seckill/" + productId + "/result")
+                        .header("Authorization", "Bearer " + user.token()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data").doesNotExist());
+
+        // ① 状态一：建单成功（结果 key 存在） → 200 返回 orderId
+        redis.opsForValue().set("citygo:seckill:result:" + productId + ":" + user.userId(), "888888");
+        mockMvc.perform(get("/api/seckill/" + productId + "/result")
+                        .header("Authorization", "Bearer " + user.token()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data").value(888888L));
     }
 
 }
